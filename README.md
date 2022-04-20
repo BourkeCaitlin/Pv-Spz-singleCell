@@ -1,6 +1,6 @@
 # Pv-Spz-singleCell
 
-## Workflow and repository of scripts used for analysis in <br> [Single-cell RNA sequencing of Plasmodium vivax sporozoites reveals stage- and species-specific transcriptomic signatures]()
+## Workflow and repository of scripts used for analysis in <br> [Single-cell RNA sequencing of <i>Plasmodium vivax</i> sporozoites reveals stage- and species-specific transcriptomic signatures]()
 
 Anthony A. Ruberto <sup>1,\#,\^</sup>, Caitlin Bourke <sup>2,3,#</sup>, Amélie Vantaux <sup>4</sup>, Steven P. Maher <sup>5</sup>, Aaron Jex <sup>2,3</sup>, Benoit Witkowski <sup>4</sup>, Georges Snounou <sup>6</sup>, Ivo Mueller <sup>1,2,3,*</sup> 
 
@@ -23,4 +23,4 @@ Anthony A. Ruberto <sup>1,\#,\^</sup>, Caitlin Bourke <sup>2,3,#</sup>, Amélie 
 
 ***
 
-[](https://www.biorxiv.org/content/biorxiv/early/2021/11/24/2021.11.24.469176/F1.large.jpg?width=800&height=600&carousel=1)
+![](https://www.biorxiv.org/content/biorxiv/early/2021/11/24/2021.11.24.469176/F1.large.jpg?width=800&height=600&carousel=1)
