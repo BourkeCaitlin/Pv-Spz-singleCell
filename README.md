@@ -23,4 +23,4 @@ Anthony A. Ruberto <sup>1,\#,\^</sup>, Caitlin Bourke <sup>2,3,#</sup>, Amélie 
 
 ***
 
-[](https://www.biorxiv.org/content/10.1101/2021.11.24.469176v1.full)
+[](https://www.biorxiv.org/content/biorxiv/early/2021/11/24/2021.11.24.469176/F1.large.jpg?width=800&height=600&carousel=1)
