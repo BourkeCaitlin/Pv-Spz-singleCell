@@ -44,4 +44,9 @@ The .Rmd files are numbered according to the figure panels they generate (ie 0_ 
 ![](https://www.biorxiv.org/content/biorxiv/early/2021/11/24/2021.11.24.469176/F2.large.jpg?width=800&height=600&carousel=1)
     
 ![](https://www.biorxiv.org/content/biorxiv/early/2021/11/24/2021.11.24.469176/F3.large.jpg?width=800&height=600&carousel=1)
+    
+![](https://www.biorxiv.org/content/biorxiv/early/2021/11/24/2021.11.24.469176/F4.large.jpg?width=800&height=600&carousel=1)
+    
+![](https://www.biorxiv.org/content/biorxiv/early/2021/11/24/2021.11.24.469176/F5.large.jpg?width=800&height=600&carousel=1)
 
+![](https://www.biorxiv.org/content/biorxiv/early/2021/11/24/2021.11.24.469176/F6.large.jpg?width=800&height=600&carousel=1)
