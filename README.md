@@ -28,7 +28,7 @@ Anthony A. Ruberto <sup>1,\#,\^</sup>, Caitlin Bourke <sup>2,3,#</sup>, Amélie 
 🔑 There are several starting points if you would like to re-run the analysis:
 1. Raw sequencing files as stored at [ENA](https://www.ebi.ac.uk/ena/browser/text-search?query=PRJEB42435)
     - requires re-mapping with STARsolo or your preferred mapping software
-2. STARsolo output stored at Zenodo [Zenodo](10.5281/zenodo.6474355)
+2. STARsolo output stored at [Zenodo](10.5281/zenodo.6474355)
     - reproducible workflow
 3. Rds (ie starting mid-way through) output stored at [Zenodo](10.5281/zenodo.6474355)
     - reproducible workflow
