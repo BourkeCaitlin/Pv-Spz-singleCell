@@ -2,7 +2,7 @@
 
 ## Workflow and repository of scripts used for analysis in <br> [Single-cell RNA sequencing of <i>Plasmodium vivax</i> sporozoites reveals stage- and species-specific transcriptomic signatures]()
 
-Anthony A. Ruberto <sup>1,\#,\^</sup>, Caitlin Bourke <sup>2,3,#</sup>, Amélie Vantaux <sup>4</sup>, Steven P. Maher <sup>5</sup>, Aaron Jex <sup>2,3</sup>, Benoit Witkowski <sup>4</sup>, Georges Snounou <sup>6</sup>, Ivo Mueller <sup>1,2,3,*</sup> 
+Anthony A. Ruberto <sup>1,\#,\^</sup>, Caitlin Bourke <sup>2,3,#</sup>, Amélie Vantaux <sup>4</sup>, Steven P. Maher <sup>5</sup>, Aaron Jex <sup>2,3</sup>, Benoît Witkowski <sup>4</sup>, Georges Snounou <sup>6</sup>, Ivo Mueller <sup>1,2,3,*</sup> 
 
 <sup>1</sup> Department of Parasites and Insect Vectors, Institut Pasteur, Paris, France <br>
 <sup>2</sup> Division of Population Health and Immunity, Walter and Eliza Hall Institute of Medical Research, Parkville, Victoria, Australia<br>
