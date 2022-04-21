@@ -26,11 +26,11 @@ Anthony A. Ruberto <sup>1,\#,\^</sup>, Caitlin Bourke <sup>2,3,#</sup>, Amélie 
 🔍 This is a repository containing the Rmd files and scripts that were created for the analysis of <i> Plasmodium vivax </i> sporozoites.
 
 🔑 There are several starting points if you would like to re-run the analysis:
-1. Raw sequencing files as stored at ENA <<LINK>>
+1. Raw sequencing files as stored at [ENA](https://www.ebi.ac.uk/ena/browser/text-search?query=PRJEB42435)
     - requires re-mapping with STARsolo or your preferred mapping software
-2. STARsolo output stored at Zenodo <<LINK>>
+2. STARsolo output stored at Zenodo [Zenodo](10.5281/zenodo.6474355)
     - reproducible workflow
-3. Rds (ie starting mid-way through) output stored at Zenodo <<LINK>>
+3. Rds (ie starting mid-way through) output stored at [Zenodo](10.5281/zenodo.6474355)
     - reproducible workflow
     - re-run a specific part of the analysis
   
