@@ -1,0 +1,1056 @@
+   
+---
+title: "P. vivax single cell RNA seq: comparing *P. vivax* sporozoites to other species"
+subtitle: "File: 5_IntegrationSeurat_Pf_MCA.Rmd"
+output: html_document
+---
+```{r setup}
+library(tidyverse)
+library(DT)
+library(dittoSeq)
+library(DropletUtils) #load and empty drops
+library(SingleCellExperiment) #functions for working with SingleCellExperiments
+library(tidyverse) #tidy and visualisation
+library(rtracklayer) #import gff files
+library(RColorBrewer)
+library(gridExtra)
+library(scales)
+library(ggExtra)
+library(ggpubr)
+library(Seurat) #tools for working with single cell objects
+library(patchwork) # easy visualisation of ggobjects in grid
+library(readxl)
+library(DT)
+library(scuttle)
+library(viridis)
+source("scripts/functions_aesthetics.R")
+```
+
+Upload Sporozoite and Pfam metadata.
+```{r import metadata}
+Pv_genes <- read_csv("outputs/5a_SporozoiteInfo_collated.csv") %>%
+   select(-1)
+
+Pv_genes_pfam <- read_csv("genefiles/PlasmoDB-Pfam.csv")%>% 
+  select(-1)
+```
+
+Import *P.vivax* scRNA-seq data.
+```{r import pv seurat object}
+all_Pv <- readRDS("outputs/3_ClusteringSeurat.rds")#this is the 'filtered'dataset
+
+set.seed(4564)
+
+Idents(all_Pv)<-"Replicate"
+all_Pv <-subset(x = all_Pv, downsample = 500)
+```
+
+Import *P.falciparum* scRNA-seq data.
+```{r import pf data}
+
+RealHowick <- read.csv("data/counts_pfmca_20200525.csv") # Pf SmartSeq - 2021  Real et al. Nat Comm
+RealHowick_meta <- read.csv("data/allcellinfo_pfmca_20200930.csv") # Pf SmartSeq - 2021  Real et al. Nat Comm
+
+pfcounts <- as.data.frame(RealHowick)
+rownames(pfcounts) <- pfcounts$X
+pfcounts <- pfcounts[,-1]
+
+rownames(pfcounts) <- gsub("\\.1", "", rownames(pfcounts))
+
+mca_falci <- SingleCellExperiment(assays = list(
+  counts = as.matrix(pfcounts)
+), colData = RealHowick_meta)
+```
+
+Prep Pf data for merging with Pv data set.
+```{r merge pv and pf spz data 1}
+DefaultAssay(all_Pv) <- "originalexp"
+
+all_Pv@assays$originalexp@counts@Dimnames[[1]]<- Pv_genes$Orthogroup[match(all_Pv@assays$originalexp@counts@Dimnames[[1]], Pv_genes$GeneSeurat)]
+all_Pv@assays$originalexp@data@Dimnames[[1]]<- Pv_genes$Orthogroup[match(all_Pv@assays$originalexp@data@Dimnames[[1]], Pv_genes$GeneSeurat)]
+all_Pv@assays$CCA@data@Dimnames[[1]]<- Pv_genes$Orthogroup[match(all_Pv@assays$CCA@data@Dimnames[[1]], Pv_genes$GeneSeurat)]
+
+counts <- GetAssayData(all_Pv, assay = "originalexp", slot = "counts")
+counts <- counts[!is.na(rownames(counts)),]
+
+all_Pv_noNA<- subset(all_Pv, features = rownames(counts))
+all_Pv_noNA<-NormalizeData(all_Pv_noNA)
+all_Pv_noNA[['CCA']] <- NULL
+all_Pv_noNA[["originalexp"]]@meta.features <- data.frame(row.names = rownames(all_Pv_noNA[["originalexp"]]))
+all_Pv_noNA<-FindVariableFeatures(all_Pv_noNA, selection.method = "vst", nfeatures = nrow(all_Pv_noNA)*.3,verbose = FALSE, assay = "originalexp")
+
+# use the Pv_genes large document to assign filtered orthologues to the rownames of the SCEs
+rownames(mca_falci) <- Pv_genes$Orthogroup[match(rownames(mca_falci), Pv_genes$falciparum)]
+mca_falci <- mca_falci[!is.na(rownames(mca_falci)),]
+
+# add stage meta data and remove the gametocytes and ookinetes
+colData(mca_falci)$Sample <- colData(mca_falci)$stage
+mca_falci <- mca_falci[,!colData(mca_falci)$stage=="gam"]
+mca_falci <- mca_falci[,!colData(mca_falci)$stage=="ook"]
+colData(mca_falci)$Replicate <- paste0(colData(mca_falci)$stage, "_falci")
+colData(mca_falci)$Barcode <- rownames(colData(mca_falci))
+
+combined <- list(mca_falci)
+```
+
+Add per cell and per feature information again because quite few rows have been removed from the dataset so should probably be re-filtered... (genes that did not have orthologues).
+
+```{r add per ortho qc}
+for (i in 1:length(combined)){
+ combined[[i]] <- addPerCellQC(combined[[i]])
+ combined[[i]] <- addPerFeatureQC(combined[[i]], detection_limit = 0)
+}
+```
+
+```{r filter out outliers}
+outliers <- NULL
+for (i in 1:length(combined)) {
+  outliers[[i]] <-  colData(combined[[i]])$detected<60
+}
+
+# subset
+for (i in 1:length(combined)){
+  combined[[i]] <- combined[[i]][ ,!(outliers[[i]])]
+}
+for (i in 1:length(combined)){
+  combined[[i]] <- combined[[i]][rowSums(counts(combined[[i]])>2)>1, ]
+}
+```
+
+Combine Pv and Pf data.
+```{r merge pv and pf spz data 2}
+replicates.seu <- NULL
+for (i in 1:length(combined)) {
+  replicates.seu[[i]] <- as.Seurat(combined[[i]], counts = "counts", data = "counts" )
+}
+for (i in 1:length(replicates.seu)) {
+    replicates.seu[[i]] <- NormalizeData(replicates.seu[[i]], verbose = FALSE)
+    replicates.seu[[i]] <- FindVariableFeatures(replicates.seu[[i]], selection.method = "vst", nfeatures = nrow(replicates.seu[[i]])*.3,verbose = FALSE)
+}
+
+all <- c(all_Pv_noNA,replicates.seu[[1]])
+features <- SelectIntegrationFeatures(object.list = all)
+all.anchors <- FindIntegrationAnchors(object.list = all, anchor.features = features)
+all.combined <- IntegrateData(anchorset = all.anchors)
+
+DefaultAssay(all.combined) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+all.combined<- ScaleData(all.combined, verbose = FALSE)
+all.combined <- RunPCA(all.combined, npcs = 30, verbose = FALSE)
+ElbowPlot(all.combined)
+all.combined<- RunUMAP(all.combined, reduction = "pca", dims = 1:15, min.dist = 0.1, umap.method = "umap-learn")
+
+all.combined <- FindNeighbors(all.combined, reduction = "pca", dims = 1:15)
+all.combined<- FindClusters(all.combined, resolution = 0.1, algorithm = 4)
+all.combined<- FindClusters(all.combined, resolution = 0.2, algorithm = 4)
+all.combined<- FindClusters(all.combined, resolution = 0.3, algorithm = 4)
+all.combined@meta.data
+
+ortho_int <- all.combined
+ortho_int@meta.data <- ortho_int@meta.data %>% 
+  mutate(species = case_when(
+    Replicate=="Pv1"~"P.vivax",
+    Replicate=="Pv2"~"P.vivax",
+    Replicate=="Pv3"~"P.vivax",
+    Replicate=="actSpz_falci"~"P.falciparum",
+    Replicate=="hlSpz_falci"~"P.falciparum",
+    Replicate=="injSpz_falci"~"P.falciparum",
+    Replicate=="ooSpz_falci"~"P.falciparum",
+    Replicate=="sgSpz_falci"~"P.falciparum",
+    Replicate=="ook_falci"~"P.falciparum",
+    Replicate=="gam_falci"~"P.falciparum",
+        TRUE~"other"
+  ))
+
+ortho_int$Replicate<-factor(ortho_int$Replicate, levels = c("ooSpz_falci","hlSpz_falci","sgSpz_falci","injSpz_falci","actSpz_falci","Pv1", "Pv2", "Pv3",
+                                                            "ook_falci", "gam_falci"))
+
+```
+
+Let's plot the data.
+```{r plotting 1, fig.width=5, fig.height=3}
+
+DimPlot(ortho_int,  group.by = "species", cols = c("green", "blue"))+border()
+
+replicate <- ortho_int@reductions$umap@cell.embeddings %>%
+    as_tibble() %>% 
+    ggplot(aes(UMAP_1, UMAP_2, color = ortho_int$species)) +
+    geom_point( alpha = 0.5 ,size = 0.4) +
+    #facet_grid(. ~ ortho_int$Replicate, scales = "fixed") +
+    geom_density2d(size = 0.25,colour = "red",alpha = 0.75) + 
+    labs(y = "", x = "")+
+    #tenx_theme()+
+    theme(strip.background = element_blank(),
+          strip.text = element_text(colour = "black", size = 25, hjust = 0),
+          strip.text.y = element_blank(), 
+          axis.text   = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid.major = element_line(colour = "grey"))
+
+replicate_split <- ortho_int@reductions$umap@cell.embeddings %>%
+    as_tibble() %>% 
+    ggplot(aes(UMAP_1, UMAP_2)) +
+    geom_point(color = "black",alpha = 0.5 ,size = 0.4) +
+    facet_grid(. ~ ortho_int$Replicate, scales = "fixed") +
+    geom_density2d(size = 0.5,colour = "red",alpha = 0.75) + 
+    labs(y = "", x = "")+
+    tenx_theme()+
+    theme(strip.background = element_blank(),
+          strip.text = element_text(colour = "black", size = 25, hjust = 0),
+          strip.text.y = element_blank(), 
+          axis.text   = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid.major = element_line(colour = "grey"))
+
+DimPlot(ortho_int,group.by = "Replicate")+border()+scale_color_lancet()
+
+VlnPlot(ortho_int, features = "detected", group.by = "species", pt.size = 0)+border()+scale_fill_lancet()
+
+ortho_int@meta.data$Replicate <- factor(ortho_int@meta.data$Replicate,      # Reordering group factor levels
+                         levels = c("Pv1", "Pv2", "Pv3", "ooSpz_falci", "hlSpz_falci", "sgSpz_falci", "injSpz_falci", "actSpz_falci"))
+
+cols_species <- c("#6CDBEB", "#a7e831")
+cols_falciparum <- c( "#6CDBEB", "#999999")
+cols_vivax <- c("#999999",  "#a7e831")
+
+rep_split <-
+  DimPlot(
+    ortho_int,
+    reduction = "umap",
+    group.by = "species",
+    split.by = "Replicate",
+    cols = cols_species
+  ) + tenx_theme() + 
+  labs(title = "", x = "UMAP 1", y = "UMAP 2") + 
+  theme(plot.tag = element_text(size = 40, face = "bold"),
+        panel.grid.major = element_line(colour = "grey"),
+        strip.background = element_blank(),
+        strip.text = element_text(colour = "black"),
+        legend.position = "none")
+falciparum <- DimPlot(ortho_int, group.by = "species", cols = cols_falciparum)+
+  tenx_theme()+
+  labs(title = "P. falciparum", y = "")+
+  theme(legend.position = "none",
+        panel.grid.major = element_line(colour = "grey"),
+        plot.title = element_text(face = "italic"))
+vivax <- DimPlot(ortho_int, group.by = "species", cols = cols_vivax, order = T)+
+  tenx_theme()+
+  labs(title = "P. vivax", x = "UMAP 1", y = "UMAP 2")+
+  theme(legend.position = "none",
+        panel.grid.major = element_line(colour = "grey"),
+        plot.title = element_text(face = "italic"))
+multi_umap <- vivax+falciparum
+multi_umap/rep_split
+```
+
+```{r plotting 2 - species split}
+DimPlot(ortho_int, group.by = "species")+
+  tenx_theme()+
+  labs(title = "")+
+  theme(legend.position = "right",
+        panel.grid.major = element_line(colour = "grey")) + 
+  scale_colour_aaas()
+```
+
+```{r plotting 3 prep - relabel clusters (cluster ortholog group [cog])}
+ortho_int@meta.data <- ortho_int@meta.data %>% 
+   mutate(cluster_plot = case_when(
+    integrated_snn_res.0.2==4~"ORTHO_C1",
+    integrated_snn_res.0.2==1~"ORTHO_C2",
+    integrated_snn_res.0.2==2~"ORTHO_C3",
+    integrated_snn_res.0.2==3~"ORTHO_C4"
+  ))
+ortho_int@meta.data <- ortho_int@meta.data %>% 
+  mutate(assignment = case_when(
+    CCA_snn_res.0.1==3~ "C1",
+    CCA_snn_res.0.1==1~ "C2",
+    CCA_snn_res.0.1==2~ "C3",
+    TRUE~stage
+  ))
+```
+
+```{r plotting 3 - clusters (cluster ortholog group [cog])colour by cog}
+ortho_int <-SetIdent(ortho_int, value = "cluster_plot")
+
+DimPlot(ortho_int, group.by = "cluster_plot")+
+  tenx_theme()+
+  labs(title = "", x = "UMAP 1", y = "UMAP 2")+
+  theme(legend.position = "right",
+        panel.grid.major = element_line(colour = "grey")) + 
+  scale_colour_futurama()
+```
+
+```{r plotting 4 - proportion across cogs}
+ortho_int <-SetIdent(ortho_int, value = "assignment")
+
+pal <- c(RColorBrewer::brewer.pal(9, "Set1"), RColorBrewer::brewer.pal(8, "Set2"))
+pal3 <- pal_lancet("lanonc")(9)
+pal4 <- c("#00468BFF","#ED0000FF","grey")
+
+cols3 <- c("#b4ddd4", "#20502e", "#c5df72")
+cols3.2 <- c("#b4ddd4", "#20502e", "#c5df72")
+cols5 <- c("#b4ddd4", "#075c62", "#9ad859", "#710c9e", "#2fddce")
+cols6 <- c("#75eab6","#7430a3","#3c3f85",  "#94da40", "#1b511d", "#3fc6f8" )
+cols7 <- c("#75eab6", "#3c3f85", "#94da40", "#7430a3", "#3fc6f8", "#1b511d", "#fb5de7")
+cols8 <- c("#b4ddd4", "#075c62", "#9ad859", "#710c9e", "#2fddce",  "#1b511d", "#fb5de7","cornflowerblue")
+cols6.1 <- c("#7430a3","#75eab6","#3c3f85",   "#1b511d", "#94da40","#3fc6f8" )
+
+split_ortho_0.3 <- ortho_int@meta.data %>% 
+  dplyr::group_by(integrated_snn_res.0.3, species) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(integrated_snn_res.0.3) %>% 
+  dplyr::mutate(percent = 100*n/sum(n)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = factor(integrated_snn_res.0.3, levels = c(5,4,3,2,1,0)), y = percent, fill = species))+
+  scale_fill_manual(values  = cols3)+
+  geom_col()+
+  coord_flip()+
+  tenx_theme()+
+  labs(y = "percent", x = "")
+
+split_ortho_0.2 <- ortho_int@meta.data %>% 
+  dplyr::group_by(integrated_snn_res.0.2, Replicate) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(integrated_snn_res.0.2) %>% 
+  dplyr::mutate(percent = 100*n/sum(n)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = factor(integrated_snn_res.0.2, levels = c(5,4,3,2,1,0)), y = percent, fill = Replicate))+
+  # scale_fill_manual(values  = cols3)+
+  geom_col()+
+  coord_flip()+
+  tenx_theme()+
+  labs(y = "percent", x = "")
+
+# split by species
+ortho_int@meta.data %>% 
+  dplyr::group_by(integrated_snn_res.0.2, species) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(integrated_snn_res.0.2) %>% 
+  dplyr::mutate(percent = 100*n/sum(n)) %>% 
+  ungroup() %>% 
+  mutate(cluster = case_when(
+    integrated_snn_res.0.2==4~"ORTHO_C1",
+    integrated_snn_res.0.2==1~"ORTHO_C2",
+    integrated_snn_res.0.2==2~"ORTHO_C3",
+    integrated_snn_res.0.2==3~"ORTHO_C4"
+  )) %>% 
+  ggplot(aes(x = factor(cluster,  levels = c("ORTHO_C4", "ORTHO_C3", "ORTHO_C2", "ORTHO_C1")), y = percent, fill = species))+
+  geom_col()+
+  coord_flip()+
+  tenx_theme()+
+  labs(y = "Percent", x = "", fill = "")+
+  scale_fill_aaas(labels = c("P. falciparum", "P. vivax"))+
+  theme(legend.text = element_text(face = "italic"))+
+  geom_bar(stat = "identity", color = "black")
+
+# split by cog
+
+ortho_int@meta.data %>% 
+  dplyr::group_by(integrated_snn_res.0.2, assignment) %>% 
+  dplyr::count() %>% 
+  dplyr::group_by(integrated_snn_res.0.2) %>% 
+  dplyr::mutate(percent = 100*n/sum(n)) %>% 
+  ungroup() %>% 
+  mutate(cluster = case_when(
+    integrated_snn_res.0.2==4~"ORTHO_C1",
+    integrated_snn_res.0.2==1~"ORTHO_C2",
+    integrated_snn_res.0.2==2~"ORTHO_C3",
+    integrated_snn_res.0.2==3~"ORTHO_C4"
+  )) %>% 
+  ggplot(aes(x = factor(cluster,  levels = c("ORTHO_C4", "ORTHO_C3", "ORTHO_C2", "ORTHO_C1")), y = percent, fill = factor(assignment, levels = c("ooSpz", "C1", "hlSpz", "sgSpz", "injSpz", "C2", "actSpz", "C3"))))+
+  # scale_fill_manual(values  = cols3)+
+  geom_col()+
+  coord_flip()+
+  tenx_theme()+
+  labs(y = "Percent", x = "", fill = "")+
+  scale_fill_aaas()+
+  geom_bar(stat = "identity", color = "black")
+```
+Find markers across the 'combined' clusters.
+```{r markers of cogs}
+
+ortho_int$cluster_plot<-factor(ortho_int$cluster_plot, levels = c("ORTHO_C1", "ORTHO_C2", "ORTHO_C3", "ORTHO_C4"))
+Idents(ortho_int) <- "cluster_plot"
+
+# cog 1
+ConservedMarkersC1<-FindConservedMarkers(
+  ortho_int,
+  ident.1 = "ORTHO_C1",
+  grouping.var = "species",
+  min.pct = .25,
+  min.diff.pct = 0.125,
+  only.pos = T,
+  assay = "originalexp"
+)
+
+vivaxConservedMarkersC1<-ConservedMarkersC1[,-c(1:5,11,12)]
+vivaxConservedMarkersC1$cluster<-1
+
+# cog 2
+ConservedMarkersC2<-FindConservedMarkers(
+  ortho_int,
+  ident.1 = "ORTHO_C2",
+  grouping.var = "species",
+  min.pct = .25,
+  min.diff.pct = .125,
+  only.pos = T,
+  assay = "originalexp"
+)
+
+vivaxConservedMarkersC2<-ConservedMarkersC2[,-c(1:5,11,12)]
+vivaxConservedMarkersC2$cluster<-2
+
+# cog 3
+ConservedMarkersC3<-FindConservedMarkers(
+  ortho_int,
+  ident.1 = "ORTHO_C3",
+  grouping.var = "species",
+  min.pct = .25,
+  min.diff.pct = .125,
+  only.pos = T,
+  assay = "originalexp"
+)
+
+vivaxConservedMarkersC3<-ConservedMarkersC3[,-c(1:5,11,12)]
+
+ConservedMarkersC4<-FindConservedMarkers(
+  ortho_int,
+  ident.1 = "ORTHO_C4",
+  grouping.var = "species",
+  min.pct = .25,
+  min.diff.pct = 0.125,
+  only.pos = T,
+  assay = "originalexp"
+)
+```
+Let's assess cogs 1 and 2.
+```{r cogs 1 and 2 assessment}
+
+# cogs 1 and 2 merged
+vivaxC1_C2_conserved<-rbind(vivaxConservedMarkersC2, vivaxConservedMarkersC1)
+vivaxC1_C2_conserved_2<-rbind(ConservedMarkersC2,ConservedMarkersC1)
+
+vivaxC1_C2_conserved <- vivaxC1_C2_conserved %>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes) 
+
+vivaxC1_C2_conserved_2 <- vivaxC1_C2_conserved_2 %>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes) 
+
+vivaxC1_C2_conserved<<-as.data.frame(vivaxC1_C2_conserved)
+rownames(vivaxC1_C2_conserved)<-vivaxC1_C2_conserved$Orthogroup
+
+vivaxC1_C2_conserved_2<-as.data.frame(vivaxC1_C2_conserved_2)
+rownames(vivaxC1_C2_conserved_2)<-vivaxC1_C2_conserved_2$Orthogroup
+
+vivaxC1_C2_conserved<-vivaxC1_C2_conserved [,-c(1)]
+vivaxC1_C2_conserved<-vivaxC1_C2_conserved%>%
+  filter(P.vivax_p_val_adj < 0.05)
+
+vivaxC1_C2_conserved_2<-vivaxC1_C2_conserved_2 [,-c(1)]
+vivaxC1_C2_conserved_2<-vivaxC1_C2_conserved_2%>%
+  filter(P.vivax_p_val_adj < 0.05)
+
+write.csv(vivaxC1_C2_conserved_2, "tables/vivaxC1_C2_conserved_2.csv")
+
+# Plot
+
+DotPlot(ortho_int, features = rownames(vivaxC1_C2_conserved), cluster.idents = F, assay = "originalexp", scale = T, dot.scale = 5)+
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))+
+    coord_flip()+border()+
+    scale_colour_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+    scale_x_discrete(labels =vivaxC1_C2_conserved$GeneDescription, position = "top")+
+    
+  theme(legend.position =  "left",
+          axis.title=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x=element_blank())
+
+```
+Let's assess the cogs one by one.
+```{r cog assessments 1}
+Idents(ortho_int) <- "cluster_plot"
+
+# C1
+
+Ortho_C1<-subset(ortho_int, idents = "ORTHO_C1")
+Idents(Ortho_C1) <- "species"
+DefaultAssay(Ortho_C1) <- "originalexp"
+
+avg.C1 <- log1p(AverageExpression(Ortho_C1, verbose = FALSE)$originalexp)
+avg.C1<-as.data.frame(avg.C1)
+avg.C1$gene <- rownames(avg.C1)
+avg.C1$diff<-avg.C1$P.vivax-avg.C1$P.falciparum
+avg.C1<-subset(avg.C1, diff != 0)
+avg.C1<-avg.C1%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+avg.C1<-avg.C1[,c(1:9, 12,15)]
+avg.C1.vivax<-subset(avg.C1, P.falciparum == 0)
+avg.C1.falciparum<-subset(avg.C1, P.vivax == 0)
+avg.C1.vivax.falcip.exp<-subset(avg.C1, P.vivax > 0 & P.falciparum > 0)
+
+write.csv(avg.C1, "tables/avg.C1.csv")
+
+pC1 <- ggplot(avg.C1, aes(P.vivax, P.falciparum)) + geom_point(alpha = 0.25, size =0.5) + ggtitle("ORTHO_C1")
+pC1<-pC1+theme_linedraw()+border()+geom_abline(color = "red")+scale_x_continuous(limits = c(0,8))+
+  scale_y_continuous(limits = c(0,8))
+
+ORTHO_C1_markers<-FindMarkers(Ortho_C1,test.use = "wilcox", features = avg.C1.vivax.falcip.exp$Orthogroup, ident.1 = "P.vivax", ident.2 = "P.falciparum", min.pct = 0.5, min.diff.pct = 0.0, only.pos = F, assay = "originalexp" )
+
+# Pfam analysis
+
+DEgenesOC1vivax<-ORTHO_C1_markers%>%filter(avg_log2FC > 0)%>%
+  filter(p_val_adj<0.05)
+DEgenesOC1vivax$ortho<-rownames(DEgenesOC1vivax)
+DEgenesOC1vivaxGenes<-c(DEgenesOC1vivax$ortho, avg.C1.vivax$Orthogroup)
+DEgenesOC1vivaxGenes<-as.data.frame(DEgenesOC1vivaxGenes)
+DEgenesOC1vivaxGenes$species<-"P.vivax"
+rownames(DEgenesOC1vivaxGenes)<-DEgenesOC1vivaxGenes$DEgenesOC1vivaxGenes
+
+DEgenesOC1vivaxGenes<-DEgenesOC1vivaxGenes%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+DEgenesOC1vivaxGenes<-DEgenesOC1vivaxGenes%>%
+  select(1,3,4)
+DEgenesOC1vivaxGenes<-as.data.frame(DEgenesOC1vivaxGenes)
+DEgenesOC1vivaxGenes = DEgenesOC1vivaxGenes %>% 
+  filter(DEgenesOC1vivaxGenes$ID != "NA")
+rownames(DEgenesOC1vivaxGenes)<-DEgenesOC1vivaxGenes$ID
+
+# add Pfam info to cog 1 DE genes data frame
+
+DEgenesOC1vivaxGenes<-DEgenesOC1vivaxGenes%>%
+   as_tibble(rownames = "gene") %>% 
+  left_join(Pv_genes_pfam)
+
+DEgenesOC1vivaxGenes = DEgenesOC1vivaxGenes %>% 
+  filter(DEgenesOC1vivaxGenes$pfam != "N/A")
+
+DEgenesOC1vivaxGenes<-as.data.frame(table(DEgenesOC1vivaxGenes$pfam))
+DEgenesOC1vivaxGenes
+DEgenesOC1vivaxGenes$Cluster<-"Cluster1"
+DEgenesOC1vivaxGenes$Species<-"P.vivax"
+DEgenesOC1vivaxGenes$TotalGenes<-415
+DEgenesOC1vivaxGenes$proportion<-DEgenesOC1vivaxGenes$Freq/DEgenesOC1vivaxGenes$TotalGenes*100
+
+#
+
+DEgenesOC1falcip<-ORTHO_C1_markers%>%filter(avg_log2FC < 0)%>%
+  filter(p_val_adj<0.05)
+DEgenesOC1falcip$ortho<-rownames(DEgenesOC1falcip)
+DEgenesOC1falcipGenes<-c(DEgenesOC1falcip$ortho, avg.C1.falciparum$Orthogroup)
+DEgenesOC1falcipGenes<-as.data.frame(DEgenesOC1falcipGenes)
+DEgenesOC1falcipGenes$species<-"P.falcip"
+rownames(DEgenesOC1falcipGenes)<-DEgenesOC1falcipGenes$DEgenesOC1falcipGenes
+
+DEgenesOC1falcipGenes<-DEgenesOC1falcipGenes%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+DEgenesOC1falcipGenes<-DEgenesOC1falcipGenes%>%
+  select(1,3,4,10,13)
+DEgenesOC1falcipGenes<-as.data.frame(DEgenesOC1falcipGenes)
+rownames(DEgenesOC1falcipGenes)<-DEgenesOC1falcipGenes$ID
+
+# add Pfam info to cog 1 Pf DE genes data frame
+
+DEgenesOC1falcipGenes<-DEgenesOC1falcipGenes%>%
+   as_tibble(rownames = "gene") %>% 
+  left_join(Pv_genes_pfam)
+
+DEgenesOC1falcipGenes = DEgenesOC1falcipGenes %>% 
+  filter(DEgenesOC1falcipGenes$pfam != "N/A")
+
+DEgenesOC1falcipGenes<-as.data.frame(table(DEgenesOC1falcipGenes$pfam))
+DEgenesOC1falcipGenes
+DEgenesOC1falcipGenes$Cluster<-"Cluster1"
+DEgenesOC1falcipGenes$Species<-"P.falciparum"
+DEgenesOC1falcipGenes$TotalGenes<-1340
+DEgenesOC1falcipGenes$proportion<-DEgenesOC1falcipGenes$Freq/DEgenesOC1falcipGenes$TotalGenes*100
+
+#
+
+ORTHO_C1_markers<-ORTHO_C1_markers%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+
+ORTHO_C1_markers<-ORTHO_C1_markers[,c(1:10, 13,16,17,18)]
+ORTHO_C1_markers$diff<-abs(ORTHO_C1_markers$pct.1-ORTHO_C1_markers$pct.2)
+ORTHO_C1_markers$cluster<-"ORTHO_C1"
+
+ORTHO_C1_markers<-ORTHO_C1_markers%>%
+  filter(p_val_adj<0.05)%>%
+  filter(diff< 0.5)%>% 
+  arrange(avg_log2FC, pct.1)
+ORTHO_C1_markers<-ORTHO_C1_markers%>%
+  filter(row_number() > max(row_number()) - 5 | row_number() <= 5)
+
+ ORTHO_C1_markers<-  ORTHO_C1_markers %>% 
+  mutate(plot_label= paste0(ID, " | ", falciparum, "::", description))
+
+DotPlot(Ortho_C1, features = ORTHO_C1_markers$Orthogroup, cluster.idents = F, assay = "originalexp", scale = F, dot.scale = 5)+
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))+
+    coord_flip()+border()+
+    scale_colour_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+    scale_x_discrete(labels =ORTHO_C1_markers$plot_label, position = "top")+
+  theme(legend.position = "bottom")
+```
+
+```{r cog assessments 2}
+# C2
+
+Ortho_C2<-subset(ortho_int, idents = "ORTHO_C2")
+Idents(Ortho_C2) <- "species"
+DefaultAssay(Ortho_C2) <- "originalexp"
+
+avg.C2 <- log1p(AverageExpression(Ortho_C2, verbose = FALSE)$originalexp)
+avg.C2<-as.data.frame(avg.C2)
+avg.C2$gene <- rownames(avg.C2)
+avg.C2$diff<-avg.C2$P.vivax-avg.C2$P.falciparum
+avg.C2<-subset(avg.C2, diff != 0)
+avg.C2<-avg.C2%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+avg.C2<-avg.C2[,c(1:9, 12,15)]
+avg.C2.vivax<-subset(avg.C2, P.falciparum == 0)
+avg.C2.falciparum<-subset(avg.C2, P.vivax == 0)
+avg.C2.vivax.falcip.exp<-subset(avg.C2, P.vivax > 0 & P.falciparum > 0)
+
+write.csv(avg.C2, "tables/avg.C2.csv")
+
+pC2 <- ggplot(avg.C2, aes(P.vivax, P.falciparum)) + geom_point(alpha = 0.25, size =0.5) + ggtitle("ORTHO_C2")
+pC2<-pC2+theme_linedraw()+border()+geom_abline(color = "red")+scale_x_continuous(limits = c(0,8))+
+  scale_y_continuous(limits = c(0,8))
+
+ORTHO_C2_markers<-FindMarkers(Ortho_C2,test.use = "wilcox", features = avg.C2.vivax.falcip.exp$Orthogroup, ident.1 = "P.vivax", ident.2 = "P.falciparum", min.pct = 0.5, min.diff.pct = 0.0, only.pos = F, assay = "originalexp" )
+
+# Pfam analysis
+
+DEgenesOC2vivax<-ORTHO_C2_markers%>%filter(avg_log2FC > 0)%>%
+  filter(p_val_adj<0.05)
+DEgenesOC2vivax$ortho<-rownames(DEgenesOC2vivax)
+DEgenesOC2vivaxGenes<-c(DEgenesOC2vivax$ortho, avg.C2.vivax$Orthogroup)
+DEgenesOC2vivaxGenes<-as.data.frame(DEgenesOC2vivaxGenes)
+DEgenesOC2vivaxGenes$species<-"P.vivax"
+rownames(DEgenesOC2vivaxGenes)<-DEgenesOC2vivaxGenes$DEgenesOC2vivaxGenes
+
+DEgenesOC2vivaxGenes<-DEgenesOC2vivaxGenes%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+DEgenesOC2vivaxGenes<-DEgenesOC2vivaxGenes%>%
+  select(1,3,4)
+DEgenesOC2vivaxGenes<-as.data.frame(DEgenesOC2vivaxGenes)
+rownames(DEgenesOC2vivaxGenes)<-DEgenesOC2vivaxGenes$ID
+
+# add Pfam info to cog 2 Pv DE genes data frame
+
+DEgenesOC2vivaxGenes<-DEgenesOC2vivaxGenes%>%
+   as_tibble(rownames = "gene") %>% 
+  left_join(Pv_genes_pfam)
+
+DEgenesOC2vivaxGenes = DEgenesOC2vivaxGenes %>% 
+  filter(DEgenesOC2vivaxGenes$pfam != "N/A")
+
+DEgenesOC2vivaxGenes<-as.data.frame(table(DEgenesOC2vivaxGenes$pfam))
+DEgenesOC2vivaxGenes
+DEgenesOC2vivaxGenes$Cluster<-"Cluster2"
+DEgenesOC2vivaxGenes$Species<-"P.vivax"
+DEgenesOC2vivaxGenes$TotalGenes<-480
+DEgenesOC2vivaxGenes$proportion<-DEgenesOC2vivaxGenes$Freq/DEgenesOC2vivaxGenes$TotalGenes*100
+
+#
+
+DEgenesOC2falcip<-ORTHO_C2_markers%>%filter(avg_log2FC < 0)%>%
+  filter(p_val_adj<0.05)
+DEgenesOC2falcip$ortho<-rownames(DEgenesOC2falcip)
+DEgenesOC2falcipGenes<-c(DEgenesOC2falcip$ortho, avg.C2.falciparum$Orthogroup)
+DEgenesOC2falcipGenes<-as.data.frame(DEgenesOC2falcipGenes)
+DEgenesOC2falcipGenes$species<-"P.falcip"
+rownames(DEgenesOC2falcipGenes)<-DEgenesOC2falcipGenes$DEgenesOC2falcipGenes
+
+DEgenesOC2falcipGenes<-DEgenesOC2falcipGenes%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+DEgenesOC2falcipGenes<-DEgenesOC2falcipGenes%>%
+  select(1,3,4,10,13)
+DEgenesOC2falcipGenes<-as.data.frame(DEgenesOC2falcipGenes)
+rownames(DEgenesOC2falcipGenes)<-DEgenesOC2falcipGenes$ID
+
+# add Pfam info to cog 2 Pf DE genes data frame
+
+DEgenesOC2falcipGenes<-DEgenesOC2falcipGenes%>%
+   as_tibble(rownames = "gene") %>% 
+  left_join(Pv_genes_pfam)
+
+DEgenesOC2falcipGenes = DEgenesOC2falcipGenes %>% 
+  filter(DEgenesOC2falcipGenes$pfam != "N/A")
+
+DEgenesOC2falcipGenes<-as.data.frame(table(DEgenesOC2falcipGenes$pfam))
+DEgenesOC2falcipGenes
+DEgenesOC2falcipGenes$Cluster<-"Cluster2"
+DEgenesOC2falcipGenes$Species<-"P.falciparum"
+DEgenesOC2falcipGenes$TotalGenes<-1635
+DEgenesOC2falcipGenes$proportion<-DEgenesOC2falcipGenes$Freq/DEgenesOC2falcipGenes$TotalGenes*100
+
+#
+
+ORTHO_C2_markers<-ORTHO_C2_markers%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+
+ORTHO_C2_markers<-ORTHO_C2_markers[,c(1:10, 13,16,17,18)]
+ORTHO_C2_markers$diff<-abs(ORTHO_C2_markers$pct.1-ORTHO_C2_markers$pct.2)
+ORTHO_C2_markers$cluster<-"ORTHO_C2"
+
+ORTHO_C2_markers<-ORTHO_C2_markers%>%
+  filter(p_val_adj<0.05)%>%
+  filter(diff< 0.5)%>% 
+  arrange(avg_log2FC, pct.1)
+ORTHO_C2_markers<-ORTHO_C2_markers%>%
+  filter(row_number() > max(row_number()) - 5 | row_number() <= 5)
+
+ ORTHO_C2_markers<-  ORTHO_C2_markers %>% 
+  mutate(plot_label= paste0(ID, " | ", falciparum, "::", description))
+
+DotPlot(Ortho_C2, features = ORTHO_C2_markers$Orthogroup, cluster.idents = F, assay = "originalexp", scale = F, dot.scale = 5)+
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))+
+    coord_flip()+border()+
+    scale_colour_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+    scale_x_discrete(labels =ORTHO_C2_markers$plot_label, position = "top")+
+  theme(legend.position = "bottom")
+```
+
+```{r cog assessment 3}
+
+# C3
+
+Ortho_C3<-subset(ortho_int, idents = "ORTHO_C3")
+Idents(Ortho_C3) <- "species"
+DefaultAssay(Ortho_C3) <- "originalexp"
+
+avg.C3 <- log1p(AverageExpression(Ortho_C3, verbose = FALSE)$originalexp)
+avg.C3<-as.data.frame(avg.C3)
+avg.C3$gene <- rownames(avg.C3)
+avg.C3$diff<-avg.C3$P.vivax-avg.C3$P.falciparum
+avg.C3<-subset(avg.C3, diff != 0)
+avg.C3<-avg.C3%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+avg.C3<-avg.C3[,c(1:9, 12,15)]
+avg.C3.vivax<-subset(avg.C3, P.falciparum == 0)
+avg.C3.falciparum<-subset(avg.C3, P.vivax == 0)
+avg.C3.vivax.falcip.exp<-subset(avg.C3, P.vivax > 0 & P.falciparum > 0)
+
+write.csv(avg.C3, "tables/avg.C3.csv")
+
+pC3<- ggplot(avg.C3, aes(P.vivax, P.falciparum)) + geom_point(alpha = 0.25, size =0.5) + ggtitle("ORTHO_C3")
+pC3<-pC3+theme_linedraw()+border()+geom_abline(color = "red")+scale_x_continuous(limits = c(0,8))+
+  scale_y_continuous(limits = c(0,8))
+
+ORTHO_C3_markers<-FindMarkers(Ortho_C3,test.use = "wilcox", features = avg.C3.vivax.falcip.exp$Orthogroup, ident.1 = "P.vivax", ident.2 = "P.falciparum", min.pct = 0.5, min.diff.pct = 0.0, only.pos = F, assay = "originalexp" )
+
+# Pfam analysis
+
+DEgenesOC3vivax<-ORTHO_C3_markers%>%filter(avg_log2FC > 0)%>%
+  filter(p_val_adj<0.05)
+DEgenesOC3vivax$ortho<-rownames(DEgenesOC3vivax)
+DEgenesOC3vivaxGenes<-c(DEgenesOC3vivax$ortho, avg.C3.vivax$Orthogroup)
+DEgenesOC3vivaxGenes<-as.data.frame(DEgenesOC3vivaxGenes)
+DEgenesOC3vivaxGenes$species<-"P.vivax"
+rownames(DEgenesOC3vivaxGenes)<-DEgenesOC3vivaxGenes$DEgenesOC3vivaxGenes
+
+DEgenesOC3vivaxGenes<-DEgenesOC3vivaxGenes%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+DEgenesOC3vivaxGenes<-DEgenesOC3vivaxGenes%>%
+  select(1,3,4)
+DEgenesOC3vivaxGenes<-as.data.frame(DEgenesOC3vivaxGenes)
+rownames(DEgenesOC3vivaxGenes)<-DEgenesOC3vivaxGenes$ID
+
+# add Pfam info to cog 3 Pv DE genes data frame
+
+DEgenesOC3vivaxGenes<-DEgenesOC3vivaxGenes%>%
+   as_tibble(rownames = "gene") %>% 
+  left_join(Pv_genes_pfam)
+
+DEgenesOC3vivaxGenes = DEgenesOC3vivaxGenes %>% 
+  filter(DEgenesOC3vivaxGenes$pfam != "N/A")
+
+DEgenesOC3vivaxGenes<-as.data.frame(table(DEgenesOC3vivaxGenes$pfam))
+DEgenesOC3vivaxGenes
+DEgenesOC3vivaxGenes$Cluster<-"Cluster3"
+DEgenesOC3vivaxGenes$Species<-"P.vivax"
+DEgenesOC3vivaxGenes$TotalGenes<-369
+DEgenesOC3vivaxGenes$proportion<-DEgenesOC3vivaxGenes$Freq/DEgenesOC3vivaxGenes$TotalGenes*100
+
+#
+
+DEgenesOC3falcip<-ORTHO_C3_markers%>%filter(avg_log2FC < 0)%>%
+  filter(p_val_adj<0.05)
+DEgenesOC3falcip$ortho<-rownames(DEgenesOC3falcip)
+DEgenesOC3falcipGenes<-c(DEgenesOC3falcip$ortho, avg.C3.falciparum$Orthogroup)
+DEgenesOC3falcipGenes<-as.data.frame(DEgenesOC3falcipGenes)
+DEgenesOC3falcipGenes$species<-"P.falcip"
+rownames(DEgenesOC3falcipGenes)<-DEgenesOC3falcipGenes$DEgenesOC3falcipGenes
+
+DEgenesOC3falcipGenes<-DEgenesOC3falcipGenes%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+DEgenesOC3falcipGenes<-DEgenesOC3falcipGenes%>%
+  select(1,3,4,10,13)
+DEgenesOC3falcipGenes<-as.data.frame(DEgenesOC3falcipGenes)
+rownames(DEgenesOC3falcipGenes)<-DEgenesOC3falcipGenes$ID
+
+# add Pfam info to cog 3 Pf  DE genes data frame
+
+DEgenesOC3falcipGenes<-DEgenesOC3falcipGenes%>%
+   as_tibble(rownames = "gene") %>% 
+  left_join(Pv_genes_pfam)
+
+DEgenesOC3falcipGenes = DEgenesOC3falcipGenes %>% 
+  filter(DEgenesOC3falcipGenes$pfam != "N/A")
+
+DEgenesOC3falcipGenes<-as.data.frame(table(DEgenesOC3falcipGenes$pfam))
+DEgenesOC3falcipGenes
+DEgenesOC3falcipGenes$Cluster<-"Cluster3"
+DEgenesOC3falcipGenes$Species<-"P.falciparum"
+DEgenesOC3falcipGenes$TotalGenes<-1782
+DEgenesOC3falcipGenes$proportion<-DEgenesOC3falcipGenes$Freq/DEgenesOC3falcipGenes$TotalGenes*100
+
+#
+
+ORTHO_C3_markers<-ORTHO_C3_markers%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+
+ORTHO_C3_markers<-ORTHO_C3_markers[,c(1:10, 13,16,17,18)]
+ORTHO_C3_markers$diff<-abs(ORTHO_C3_markers$pct.1-ORTHO_C3_markers$pct.2)
+ORTHO_C3_markers$cluster<-"ORTHO_C3"
+
+ORTHO_C3_markers<-ORTHO_C3_markers%>%
+  filter(p_val_adj<0.05)%>%
+  filter(diff< 0.5)%>% 
+  arrange(avg_log2FC, pct.1)
+ORTHO_C3_markers<-ORTHO_C3_markers%>%
+  filter(row_number() > max(row_number()) - 5 | row_number() <= 5)
+
+ ORTHO_C3_markers<-  ORTHO_C3_markers %>% 
+  mutate(plot_label= paste0(ID, " | ", falciparum, "::", description))
+
+DotPlot(Ortho_C3, features = ORTHO_C3_markers$Orthogroup, cluster.idents = F, assay = "originalexp", scale = F, dot.scale = 5)+
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))+
+    coord_flip()+border()+
+    scale_colour_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+    scale_x_discrete(labels =ORTHO_C3_markers$plot_label, position = "top")+
+  theme(legend.position = "bottom")
+```
+
+```{r cog assessment 4}
+
+# C4
+
+Ortho_C4<-subset(ortho_int, idents = "ORTHO_C4")
+Idents(Ortho_C4) <- "species"
+DefaultAssay(Ortho_C4) <- "originalexp"
+
+avg.C4 <- log1p(AverageExpression(Ortho_C4, verbose = FALSE)$originalexp)
+avg.C4<-as.data.frame(avg.C4)
+avg.C4$gene <- rownames(avg.C4)
+avg.C4$diff<-avg.C4$P.vivax-avg.C4$P.falciparum
+avg.C4<-subset(avg.C4, diff != 0)
+avg.C4<-avg.C4%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+avg.C4<-avg.C4[,c(1:9, 12,15)]
+avg.C4.vivax<-subset(avg.C4, P.falciparum == 0)
+avg.C4.vivax$species<-"P.vivax"
+avg.C4.falciparum<-subset(avg.C4, P.vivax == 0)
+avg.C4.vivax.falcip.exp<-subset(avg.C4, P.vivax > 0 & P.falciparum > 0)
+
+write.csv(avg.C4, "tables/avg.C4.csv")
+
+p<-ggplot(avg.C4.vivax, aes(x= species, y=P.vivax, color = P.vivax)) + 
+    geom_violin(trim=T)
+p + geom_jitter(position=position_jitter(0.05), alpha = 0.5 )+
+  theme_minimal()+border()+scale_color_viridis(option = "B")+NoLegend()
+
+pC4 <- ggplot(avg.C4, aes(P.vivax, P.falciparum)) + geom_point(alpha = 0.25, size =0.5) + ggtitle("ORTHO_C4")
+pC4 <-pC4+theme_linedraw()+border()+geom_abline(color = "red")+scale_x_continuous(limits = c(0,8))+
+  scale_y_continuous(limits = c(0,8))
+
+ORTHO_C4_markers<-FindMarkers(Ortho_C4,test.use = "wilcox", features = avg.C4.vivax.falcip.exp$Orthogroup, ident.1 = "P.vivax", ident.2 = "P.falciparum", min.pct = 0.5, min.diff.pct = 0.0, only.pos = F, assay = "originalexp" )
+
+# Pfam analysis
+
+DEgenesOC4vivax<-ORTHO_C2_markers%>%filter(avg_log2FC > 0)%>%
+filter(p_val_adj<0.05)
+DEgenesOC4vivax$ortho<-rownames(DEgenesOC4vivax)
+DEgenesOC4vivaxGenes<-c(DEgenesOC4vivax$ortho, avg.C2.vivax$Orthogroup)
+DEgenesOC4vivaxGenes<-c(avg.C4.vivax$Orthogroup)
+DEgenesOC4vivaxGenes<-as.data.frame(DEgenesOC4vivaxGenes)
+DEgenesOC4vivaxGenes$species<-"P.vivax"
+rownames(DEgenesOC4vivaxGenes)<-DEgenesOC4vivaxGenes$DEgenesOC4vivaxGenes
+
+DEgenesOC4vivaxGenes<-DEgenesOC4vivaxGenes%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+DEgenesOC4vivaxGenes<-DEgenesOC4vivaxGenes%>%
+  select(1,3,4)
+DEgenesOC4vivaxGenes<-as.data.frame(DEgenesOC4vivaxGenes)
+rownames(DEgenesOC4vivaxGenes)<-DEgenesOC4vivaxGenes$ID
+
+# add Pfam info to cog 4 Pv DE genes data frame
+
+DEgenesOC4vivaxGenes<-DEgenesOC4vivaxGenes%>%
+   as_tibble(rownames = "gene") %>% 
+  left_join(Pv_genes_pfam)
+
+DEgenesOC4vivaxGenes = DEgenesOC4vivaxGenes %>% 
+  filter(DEgenesOC4vivaxGenes$pfam != "N/A")
+
+DEgenesOC4vivaxGenes<-as.data.frame(table(DEgenesOC4vivaxGenes$pfam))
+DEgenesOC4vivaxGenes
+DEgenesOC4vivaxGenes$Cluster<-"Cluster4"
+DEgenesOC4vivaxGenes$Species<-"P.vivax"
+DEgenesOC4vivaxGenes$TotalGenes<-982
+DEgenesOC4vivaxGenes$proportion<-DEgenesOC4vivaxGenes$Freq/DEgenesOC4vivaxGenes$TotalGenes*100
+
+#
+
+ORTHO_C4_markers<-ORTHO_C4_markers%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes)
+
+ORTHO_C4_markers<-ORTHO_C4_markers[,c(1:10, 13,16,17,18)]
+ORTHO_C4_markers$diff<-abs(ORTHO_C4_markers$pct.1-ORTHO_C4_markers$pct.2)
+ORTHO_C4_markers<-ORTHO_C4_markers%>%
+  filter(p_val_adj<0.05)%>%
+  filter(diff< 0.5)%>% 
+  arrange(avg_log2FC, pct.1)
+ORTHO_C4_markers<-ORTHO_C4_markers%>%
+  filter(row_number() > max(row_number()) - 5 | row_number() <= 5)
+
+```
+
+```{r combine cog 1-3 de genes}
+# combine ortho C1-3 Pf and Pv DE genes
+DEgenesORTHO<-rbind(ORTHO_C1_markers, ORTHO_C2_markers,ORTHO_C3_markers )
+```
+Let's make the Figure 5 plots.
+```{r plotting 5}
+
+ClusterData <- structure(list(Cluster = c("ORTHO_C1","ORTHO_C1","ORTHO_C2","ORTHO_C2", "ORTHO_C3", "ORTHO_C3","ORTHO_C4","ORTHO_C4"), 
+                              Cells = c(56, 132,949, 533, 118, 521,377,5),
+                              Species = c("P.vivax", "P.falciparum","P.vivax", "P.falciparum","P.vivax", "P.falciparum","P.vivax", "P.falciparum")), row.names = c(NA, -8L), class = "data.frame")
+
+ClusterData$Cluster<-factor(ClusterData$Cluster, levels = c("ORTHO_C4", "ORTHO_C3", "ORTHO_C2", "ORTHO_C1"))
+
+Pcells<-ggplot(ClusterData,aes(x=Cluster, y = ifelse(Species == "P.falciparum", Cells, -Cells), fill=Species))+ 
+  geom_bar(stat="identity", position="identity", color = "black")+
+  scale_y_continuous(limits = c(-max(ClusterData$Cells), max(ClusterData$Cells))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 15))+
+  coord_flip()+theme_minimal()+border()+scale_fill_manual(values = c("#6CDBEB","#a7e831"))+
+  theme(axis.text=element_text(size=12, color = "black"),
+        axis.title=element_text(size=40,face="bold", color = "white"))+NoLegend()
+
+GeneData <- structure(list(Cluster = c("ORTHO_C1","ORTHO_C1","ORTHO_C2","ORTHO_C2", "ORTHO_C3", "ORTHO_C3","ORTHO_C4","ORTHO_C4"), 
+                              Genes = c(368, 1326,433,1615,354,1770,982, 148),
+                              Species = c("P.vivax", "P.falciparum","P.vivax", "P.falciparum","P.vivax", "P.falciparum","P.vivax", "P.falciparum")), row.names = c(NA, -8L), class = "data.frame")
+
+GeneData$Cluster<-factor(GeneData$Cluster, levels = c("ORTHO_C4", "ORTHO_C3", "ORTHO_C2", "ORTHO_C1"))
+
+Pgenes<-ggplot(GeneData,aes(x=Cluster, y = ifelse(Species == "P.falciparum", Genes, -Genes), fill=Species))+ 
+  geom_bar(stat="identity", position="identity", color = "black")+
+  scale_y_continuous(limits = c(-max(GeneData$Genes), max(GeneData$Genes))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 15))+
+  coord_flip()+theme_minimal()+border()+scale_fill_manual(values = c("#6CDBEB","#a7e831"))+
+  theme(axis.text=element_text(size=12, color = "black"),
+        axis.title=element_text(size=40,face="bold", color = "white"))+NoLegend()
+
+ggarrange(Pcells, Pgenes, nrow = 2, ncol = 1, align = "hv", common.legend = T)
+
+OverlapData <- structure(list(Cluster = c("ORTHO_C1","ORTHO_C2", "ORTHO_C3","ORTHO_C4"), 
+                              Genes = c(560,889,816,384),
+                              Species = c("Common","Common","Common","Common")), row.names = c(NA, -4L), class = "data.frame")
+
+OverlapData$Cluster<-factor(OverlapData$Cluster, levels = c("ORTHO_C4", "ORTHO_C3", "ORTHO_C2", "ORTHO_C1"))
+
+Overlapgenes<-ggplot(OverlapData,aes(x=Cluster, y = Genes, fill=Species))+
+  geom_bar(stat="identity", position="identity", color = "black")+
+  scale_y_continuous(limits = c(0, max(OverlapData$Genes))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 15))+
+  coord_flip()+theme_minimal()+border()+scale_fill_manual(values = c("black"))+
+  theme(axis.text.x=element_text(size=12, color = "black"),
+        axis.text.y=element_text(size=12, color = "black"),
+        axis.title=element_text(size=0,face="bold", color = "white"))+NoLegend()
+
+ggarrange(Pcells,
+          ggarrange(Pgenes, Overlapgenes, ncol = 2, align = "hv"), nrow = 2, ncol = 1,heights = c(1,1))
+
+```
+
+```{r ortholog markers c3 v c4}
+
+Idents(ortho_int) <- "cluster_plot"
+
+MarkersC3C4<-FindMarkers(
+  ortho_int,
+  ident.1 = "ORTHO_C4",
+  ident.2= "ORTHO_C3",
+  min.pct = .25,
+  min.diff.pct = 0.125,
+  only.pos = F,
+  assay = "originalexp"
+)
+
+ortho_int_C3C4<-subset(ortho_int, idents = c("ORTHO_C3","ORTHO_C4"))
+
+MarkersC3C4<-MarkersC3C4%>% 
+  filter(p_val_adj < 0.05)%>% 
+  as_tibble(rownames = "Orthogroup") %>% 
+  left_join(Pv_genes) %>% 
+  arrange(Orthogroup)
+
+MarkersC3C4$diff<-abs(MarkersC3C4$pct.1-MarkersC3C4$pct.2)
+
+# create Table S12
+write.csv(MarkersC3C4, "tables/MarkersC3C4.csv")
+
+# Pfams
+
+MarkersC3C4<-as.data.frame(MarkersC3C4)
+rownames(MarkersC3C4)<-MarkersC3C4$ID
+
+Pv_genes_pfam<-Pv_genes_pfam%>% distinct()
+
+MarkersC3C4<-MarkersC3C4%>%
+   as_tibble(rownames = "gene") %>% 
+  left_join(Pv_genes_pfam)%>%
+    filter(pfam != "N/A")
+  
+MarkersC3C4.RBP<-  MarkersC3C4 %>% 
+  mutate(plot_label= paste0(ID, " | ", falciparum, "::", description)) %>% 
+  filter(str_detect(pfam_id, "PF05148|PF00849|PF10258|PF05063|PF00806|PF01253|PF00076|PF01200")) %>% 
+#filter this list for some of the pfams that are known to interact with RNA in different ways.
+    arrange(avg_log2FC)
+ 
+DotPlot(ortho_int_C3C4, features =  MarkersC3C4.RBP$Orthogroup, cluster.idents = F, assay = "originalexp", scale = F, dot.scale = 5)+
+    geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+    guides(size=guide_legend(override.aes=list(shape=21, colour="black", fill="white")))+
+    coord_flip()+border()+
+    scale_colour_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+    scale_x_discrete(labels =MarkersC3C4.RBP$plot_label, position = "top")+
+  theme(legend.position = "bottom")
+
+
+```
+
+
+End of document
+

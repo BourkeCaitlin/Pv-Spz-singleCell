@@ -1,0 +1,114 @@
+---
+title: "<i>P. vivax</i> single cell RNA seq: importing raw files and preparing data"
+subtitle: "File: 0_sceObjectPrep.Rmd"
+author: "Anthony Ruberto and Caitlin Bourke"
+date: "`r Sys.Date()`"
+output: html_document
+---
+Load libraries.
+```{r setup}
+suppressPackageStartupMessages({
+library(DropletUtils)
+library(SingleCellExperiment)
+library(tidyverse)
+library(rtracklayer)
+library(scuttle)
+})
+
+```
+
+Load data.
+```{r load raw data}
+# import files from wherever they are saved on local comp...
+# save in folder "data" or change "data" to path to files
+
+raw_pv1 <- "data/Pv1_raw/"
+raw_pv2 <- "data/Pv3_raw/"
+raw_pv3 <- "data/Pv4_raw/"
+
+Pv1<-read10xCounts(raw_pv1, col.names = T)
+Pv2<-read10xCounts(raw_pv2, col.names = T)
+Pv3<-read10xCounts(raw_pv3, col.names = T)
+
+all_Pv <- list(Pv1, Pv2, Pv3)
+rm(data_dir1,data_dir2,data_dir3)
+# name list in order
+all_Pv <- mget(ls(pattern = "^Pv[0-9]"))
+```
+
+Remove rRNA genes from the counts matrices.
+```{r removing rRNA from the counts matrix}
+rRNA_pv <- import.gff3("genefiles/PlasmoDB-51_PvivaxP01.gff") %>% 
+  as_tibble() %>% 
+  filter(type=="rRNA") %>% 
+  select(ID, description) %>% 
+  mutate(ID = gsub("\\.1", "", ID))
+
+for (i in 1:length(all_Pv)) {
+   all_Pv[[i]] <- all_Pv[[i]][!rownames(all_Pv[[i]])%in%rRNA_pv$ID,]
+}
+```
+
+Visualize knee plots.
+```{r knee plots}
+bcrank <- NULL
+uniq <- NULL
+
+for (i in 1:length(all_Pv)) {
+        bcrank[[i]] <- barcodeRanks(counts(all_Pv[[i]]))   
+        uniq[[i]] <- !duplicated(bcrank[[i]]$rank)
+        plot(bcrank[[i]]$rank[uniq[[i]]], bcrank[[i]]$total[uniq[[i]]], log = "xy",
+        xlab = "rank", ylab = "total UMI count", cex.lab = 1.2)
+        abline(h=metadata(bcrank[[i]])$inflection, col="darkgreen", lty=2)
+        abline(h=metadata(bcrank[[i]])$knee, col="dodgerblue", lty=2)
+        legend("bottomleft", legend=c("Inflection", "Knee"), 
+        col=c("darkgreen", "dodgerblue"), lty=2, cex=1.2)
+}
+rm(bcrank, uniq)
+```
+
+We will also use DropUtils' emptyDrops() function to predict empty droplets and use these predictions to remove this data from downstream analyses. Most barcodes are in fact empty and emptyDrops() needs to distinguish between 'empty' cells and cells with just a few counts. Default lower limit of library size is usually 100, we change this default to 40 to compensate for overall lower levels of expression in sporozoites due to their biology.
+
+```{r empty drops}
+set.seed(123456)
+all_Pv <- lapply(all_Pv, function(x){
+        e.out <- emptyDrops(counts(x), lower = 40)
+        x <- x[ ,which(e.out$FDR<=0.001)]
+})
+```
+
+Add metadata to SCE objects.
+```{r prep matrices}
+Pv_genes<-import.gff3("genefiles/PlasmoDB-51_PvivaxP01.gff") %>% 
+  as_tibble() %>% 
+  select(ID, description) %>% 
+  mutate(GeneSeurat = gsub("_", "-", ID)) %>% 
+  mutate(GeneDescription = paste0(ID, "::", description))
+Pv_genes$description<-gsub('\\+', ' ', Pv_genes$description)
+Pv_genes$GeneDescription<-gsub('\\+', ' ', Pv_genes$GeneDescription)
+Pv_genes<-Pv_genes[ends_with(".1",vars=Pv_genes$ID),]
+Pv_genes[]<- lapply(Pv_genes, gsub, pattern = ".1", replacement = "", fixed = TRUE)
+
+# specify some meta information on the samples
+
+case_ids <- c("Case_909", "Case_922", "Case_923")
+rep_ids <- c("Pv1", "Pv2", "Pv3")
+
+for (i in 1:length(all_Pv)) {
+ colData(all_Pv[[i]])$Replicate <- paste0(rep_ids[[i]])
+ colData(all_Pv[[i]])$Sample <- paste0(case_ids[[i]])
+ rowData(all_Pv[[i]])$Description <- Pv_genes$description[match(rownames(all_Pv[[i]]), Pv_genes$ID)]
+ rowData(all_Pv[[i]])$GeneDescription <- Pv_genes$GeneDescription[match(rownames(all_Pv[[i]]), Pv_genes$ID)]
+ colData(all_Pv[[i]])$Barcode<-paste(colData(all_Pv[[i]])$Barcode,"_",colData(all_Pv[[i]])$Sample, sep = "")
+ colnames(all_Pv[[i]])<-colData(all_Pv[[i]])$Barcode
+}
+```
+
+Save the filtered matrices.
+```{r save single-cell objects}
+dir.create("outputs")
+saveRDS(all_Pv, "outputs/0_all_Pv.rds")
+```
+
+SCE object of count matrix for cell associated barcodes with sample meta information included. 
+Proceed to next notebook.

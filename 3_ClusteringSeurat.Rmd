@@ -1,0 +1,390 @@
+---
+title: "P. vivax single cell RNA seq: unsupervised clustering and differential expression"
+subtitle: "File: 3_ClusteringSeurat.Rmd"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r libraries}
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(tidyverse)
+  library(cowplot)
+  library(ggplot2)
+  library(pheatmap)
+  library(leiden)
+  library(ggsci)
+  library(ggpubr)
+  library(ggsci)
+  library(dittoSeq)
+  library(clustree)
+  library(tidyseurat)
+  library(patchwork)
+  library(RColorBrewer)
+  library(readxl)
+  library(rafalib)
+  library(ggplotify)
+  library(viridis)
+})
+source("scripts/functions_aesthetics.R")
+source("scripts/geneInfo.R")
+```
+
+```{r data upload}
+alldata <- readRDS("outputs/2b_seu_all_Pv.rds")
+DefaultAssay(object = alldata) <- "CCA"
+```
+
+```{r}
+length(rownames(alldata))
+```
+
+
+Build the SNN graph in order to perform the graph-based clustering.
+
+```{r KNN graph}
+alldata <- FindNeighbors(alldata,
+                         reduction = "PCA_on_CCA",
+                         dims = 1:30,
+                         k.param = 60,
+                         prune.SNN = 1/15)
+names(alldata@graphs)
+alldata@graphs$CCA_nn@factors
+```
+Let's look at a subsection of the graph. The communities will be found based on these connections.
+```{r plot graph}
+pheatmap(alldata@graphs$CCA_nn[1:200,1:200],
+         col=c("white","black"),border_color = "grey90",
+         legend = F,cluster_rows = F,cluster_cols = F,fontsize = 2, color = c("red","green"))
+```
+Let's find clusters using various resolutions. We will use the Leiden algorithm to detect communities. Despite taking some extra time to run. This algorithm builds on the Louvain algorithm and hashes out some of its pitfalls.
+
+```{r find cluster - on graph, fig.width=5, fig.height=10}
+res <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8 ,0.9, 1)
+for (i in 1:length(res)) {
+   alldata <- FindClusters(alldata, resolution = res[[i]], algorithm = 4, verbose  = FALSE)
+}
+clustree_supp <- clustree(alldata, 
+                          prefix = "CCA_snn_res.",
+                          node_colour = "sc3_stability",
+                          node_text_size = 3,
+                          node_text_colour = "white")
+
+clustree_supp <- as.ggplot(clustree_supp)+labs(tag = "A")+theme(plot.margin = unit(c(1,1,1,1), "cm"), plot.tag = element_text(size = 40, face = "bold"))
+
+
+
+plot_grid(nrow = 5, ncol=2,
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.1")+scale_color_lancet()+border(),
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.2")+scale_color_lancet()+border(),      
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.3")+scale_color_lancet()+border(),
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.4")+scale_color_lancet()+border(),
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.5")+scale_color_lancet()+border(),
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.6")+scale_color_lancet()+border(),
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.7")+scale_color_lancet()+border(),
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.8")+scale_color_lancet()+border(),
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.9")+scale_color_lancet()+border(),
+  DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.1")+scale_color_lancet()+border()
+)
+
+
+DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.1", split.by =  "Replicate")+ggtitle("leiden_0.1")+scale_color_lancet()+border()
+
+
+# add plots recent AR
+
+alldata@meta.data
+```
+
+```{r set ident, fig.width = 20, fig.height=6}
+# Set the identity as Leiden clustering at 0.5 resolution
+alldata@meta.data <- alldata@meta.data %>% 
+  mutate(label = case_when(
+    Replicate=="Pv1" ~ "Rep 1",
+    Replicate=="Pv2" ~ "Rep 2",
+    Replicate=="Pv3" ~ "Rep 3",
+  ))
+# set resolution for clustering
+alldata <-SetIdent(alldata, value = "CCA_snn_res.0.1")
+alldata <- RenameIdents(object = alldata, `3` = "C1", `1`="C2", `2`= "C3")
+                        
+levels(x = alldata) <- c('C1', 'C2', 'C3')
+res0.1_fig3a <- dittoBarPlot(alldata, "ident", group.by = "label", scale = "percent")+
+  tenx_theme()+
+  labs(title = "", x = "", y = "Proportion of cells")+
+  theme(legend.position = "none")+
+  scale_fill_lancet()
+
+res0.1_fig3a_part2 <- dittoDimPlot(alldata, "ident", reduction.use = "UMAP_on_CCA", split.by = "label", size=0.25)+
+  labs(title = "", tag = "A")+
+  tenx_theme()+
+  theme(strip.background = element_rect(colour = "white", fill = "white"),
+        strip.text = element_text(hjust = .7, size = 15, colour = "black"),
+        legend.position = "none",
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.border = element_rect(size = 0.25, color = "white")
+        )+scale_color_lancet()
+res0.1_fig3b <- dittoDimPlot(alldata, "ident", reduction.use = "UMAP_on_CCA", do.ellipse = TRUE, do.contour = F, size=2)+
+  labs(title = "", color = "", tag = "B")+
+  tenx_theme()+
+  theme(axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.border = element_rect(size = 0.25, color = "white"))+scale_color_lancet()
+
+
+```
+
+
+
+```{r Cell markers, fig.width = 5, fig.height=10}
+# Compute differential expression
+all_markers_genes <- FindAllMarkers(alldata, test.use = "wilcox", min.pct = .30, min.diff.pct = 0.10, only.pos = T, assay = "originalexp")
+
+
+all_markers_genes <- all_markers_genes %>% 
+  as_tibble(rownames = "GeneSeurat") %>% 
+  mutate(GeneSeurat = gene) %>% 
+  left_join(Pv_genes) %>% 
+  filter(p_val_adj < 0.05) %>% 
+  arrange(cluster)
+
+table(all_markers_genes$cluster)
+
+
+
+
+markers.to.plot <- unique(all_markers_genes$gene)
+
+DotPlot(alldata, features = as.character(unique(all_markers_genes$gene)), cluster.idents = T, assay = "originalexp", scale = T)+
+  border()+theme_linedraw()+coord_flip()+
+  scale_x_discrete(labels = unique(all_markers_genes$GeneDescription), position = "top")+
+  scale_colour_gradient2(low = "red", mid = "grey", high = "green")+
+  theme(legend.position="left", legend.direction = 'vertical')+
+  theme(axis.title = element_blank(),
+        legend.title = element_blank(),
+        axis.text = element_text(size = 13),
+        legend.text=element_text(size=16, color = 'white'),
+        axis.text.x = element_text(color = 'black', size = 10))
+```
+
+```{r}
+all_markers_genes %>% 
+  select(cluster, ID, description,avg_log2FC, pct.1, pct.2, p_val, p_val_adj) %>% 
+  dplyr::rename(gene_id = ID, gene_description = description, `Pct Spz expressing in cluster` = pct.1, `Pct Spz expressing in other cluster` = pct.2 ) %>% 
+  write_csv("tables/S5.csv")
+```
+
+
+```{r fig.width=5}
+#how many genes in each cluster?
+table(all_markers_genes$cluster)
+#####
+
+#how many cells in each cluster?
+table(alldata@active.ident)
+
+
+a_plotly_avglofFC <- all_markers_genes %>% 
+  # filter(cluster=="C1") %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  select(avg_log2FC, pct.1, pct.2, description, ID, cluster) %>% 
+  ggplot(aes(x = ID, y = avg_log2FC, colour = cluster))+
+  geom_point()
+
+a_plotly_avglofFC
+```
+
+```{r fig.height=5}
+logFC_DE <- all_markers_genes %>% 
+  arrange(desc(avg_log2FC)) %>% 
+  select(avg_log2FC, pct.1, pct.2, description, ID, cluster) %>% 
+  ggplot(aes(x = ID, y = avg_log2FC, colour = cluster, size = pct.1))+
+  geom_point(alpha = 0.5)+
+  facet_wrap(~cluster,dir = "v")+
+  tenx_theme()+
+  scale_color_lancet()+
+  labs(x = "Genes", y  = "Average log2 fold-change", size = "% expressed in cluster" , tag = "B")+
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.grid.major.y = element_line(colour = "grey"),
+        plot.tag = element_text(size = 40, face = "bold"))
+
+```
+
+
+
+Let's visualize some of these marker genes.
+```{r visualize}
+top10 <- all_markers_genes %>% group_by(cluster) %>% top_n(-10, p_val_adj)
+top10
+
+```
+
+
+```{r dot plot fig3c, fig.width=10}
+dotplot3c <- DotPlot(
+  alldata,
+  features = unique(top10$gene),
+  scale = T,
+  assay = "originalexp"
+) +
+  geom_point(
+    aes(size = pct.exp),
+    shape = 21,
+    colour = "black",
+    stroke = 0.5
+  ) +
+  guides(size = guide_legend(override.aes = list(
+    shape = 21,
+    colour = "black",
+    fill = "white"
+  ))) +
+  coord_flip() + border() +
+  scale_colour_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+  scale_x_discrete(labels = unique(top10$GeneDescription),position = "top")+
+  labs(y = "", x = "", size = "% expressed", tag = "C")+
+  tenx_theme()+
+  theme(plot.margin = unit(c(1,1,1,1), "cm"))
+
+```
+
+
+```{r fig.width=10}
+layoutfig3a = "
+AAAAAAACC
+BBBBBBBCC
+BBBBBBBCC
+BBBBBBBCC
+DDDDDDDD#
+DDDDDDDD#
+DDDDDDDD#
+DDDDDDDD#
+"
+res0.1_fig3a_part2 + res0.1_fig3a +res0.1_fig3b +dotplot3c+ plot_layout(design = layoutfig3a) & theme(plot.tag = element_text(size = 40, face = "bold"))
+ggsave("plots/figure3abc.png", width = 20, height = 20)
+
+
+
+
+layoutfig3a = "
+AAAAAABBB
+AAAAAACCC
+AAAAAACCC
+AAAAAACCC
+DDDDDD###
+DDDDDD###
+DDDDDD###
+DDDDDD###
+"
+res0.1_fig3b+labs(tag = "A")+ res0.1_fig3a_part2 + labs(tag = "B") + res0.1_fig3a +dotplot3c+ plot_layout(design = layoutfig3a) & theme(plot.tag = element_text(size = 40, face = "bold"))
+ggsave("plots/figure3abc_new.png", width = 20, height = 20)
+
+layoutfig3a_half = "
+AAAAAABBB
+AAAAAACCC
+AAAAAACCC
+AAAAAACCC
+"
+res0.1_fig3b+labs(tag = "A")+ res0.1_fig3a_part2 + labs(tag = "B") + res0.1_fig3a + plot_layout(design = layoutfig3a_half) & theme(plot.tag = element_text(size = 40, face = "bold"))
+ggsave("plots/figure3abc_new_half.png", width = 20, height = 10)
+```
+
+
+```{r}
+layoutfig3a = "
+AAACCCCCC
+BBBCCCCCC
+BBBCCCCCC
+BBBCCCCCC
+"
+res0.1_fig3a_part2 + res0.1_fig3a +res0.1_fig3b + plot_layout(design = layoutfig3a) & theme(plot.tag = element_text(size = 40, face = "bold"))
+ggsave("plots/figure3ab.png", width = 20, height = 10)
+```
+## Generate figures for manuscript
+
+```{r figure 3a, fig.height=2, fig.width=2}
+fig3a <- DimPlot(alldata, group.by = "ident")+
+  labs(title = "", x= "UMAP 1", y = "UMAP 2")+
+  tenx_theme()+
+  theme(legend.position = "none")+scale_color_lancet()
+# 
+# ggsave("plots/figure3a.png", width = 5, height = 5, units = "in")
+```
+
+```{r determine number of cells per cluster figure 3b, fig.width=2, fig.height=2}
+fig3b <- alldata@meta.data %>% 
+  as_tibble() %>% 
+  ggplot(aes(x = CCA_snn_res.0.1, fill = CCA_snn_res.0.1))+
+  geom_bar(stat = "count", color = "black")+
+  scale_fill_d3()+
+  labs(x = "Cluster", y = "Number of cells")+
+  tenx_theme()+
+  theme(legend.position = "none")+scale_fill_lancet()
+# ggsave("plots/figure3b.png", width = 5, height = 5, units = "in")
+```
+
+```{r figure 3c}
+fig3c <- ggarrange(
+  VlnPlot(alldata, features = "nFeature_RNA", pt.size = 0) + border() + scale_y_log10() +
+    theme_linedraw() + geom_boxplot(
+      fill = "white",
+      width = 0.05,
+      outlier.size = 0.1,
+      outlier.alpha = 0.5
+    ) +
+    scale_fill_d3()+
+    theme(text = element_text(size = 20))+
+    labs(title = "Genes detected", x = "")+
+    tenx_theme()+
+    theme(legend.position =  "none",
+          panel.grid.major.y = element_line(colour = "grey"))+
+    scale_fill_lancet(),
+  
+  VlnPlot(alldata, features = "nCount_RNA", pt.size = 0) + border() + scale_y_log10() +
+    geom_boxplot(
+      fill = "white",
+      width = 0.05,
+      outlier.size = 0.1,
+      outlier.alpha = 0.5
+    ) +
+    theme(text = element_text(size = 20))+
+    scale_fill_d3()+
+    labs(title = "UMI counts", x = "")+
+    tenx_theme()+
+        theme(legend.position =  "none",
+              panel.grid.major.y = element_line(colour = "grey"))+
+    scale_fill_lancet(),
+  ncol = 1, nrow = 2
+)
+# ggsave("plots/figure3c.png", width = 5, height = 5, units = "in")
+```
+
+
+```{r fig.width=10, fig.height=5}
+fig3a+fig3b+fig3c
+ggsave("plots/figure3.png", width = 20, height = 8, units = "in")
+```
+
+```{r fig.width=10}
+
+layout_cluster_supp <- "
+AAAB
+AAAB
+AAAB
+AAAB
+"
+
+clustree_supp  + logFC_DE + plot_layout(design = layout_cluster_supp)
+ggsave("plots/cluster_supp.png", width = 20, height = 10,  units = "in")
+```
+
+```{r save rds}
+saveRDS(alldata,"outputs/3_ClusteringSeurat.Rds")
+
+alldata <- readRDS("outputs/3_ClusteringSeurat.Rds")
+```
+
+Proceed to next notebook.

@@ -1,0 +1,248 @@
+---
+title: "P. vivax single cell RNA seq: comparing *P. vivax* sporozoites to other species: collating gene information across publicly available studies"
+subtitle: "File: 5a_SporozoiteInfo_collated.Rmd"
+output: html_document
+bibliography: references.bib
+---
+
+In this file, we will create a large csv file that will summarise the DE results and gene ranking/expression from selected *P. vivax* DE publications:
+
+-   *P. vivax* bulk RNA-sequencing of sporozoites from Thai isolates [@Vivax2019]
+
+-   *P. vivax* RNA sequencing (bait-based) of hypnozoite and mixed liver-stage parasites cultured *in vitro* [@Gural2018]
+
+-   *P. vivax* sporozoite bulk RNA -sequencing comparing different media to mimic progression from mosquito to activated sporozoite [@Roth2018]
+
+Single-cell Pv sporozoites will be integrated with Pf Sporozoites from [@Real2021]
+
+Orthologues have been computed with Orthofinder [@Emms2019; @Emms2015]
+
+```{r setup}
+library(tidyverse)
+library(rtracklayer)
+library(janitor)
+library(readxl)
+
+source("scripts/geneInfo.R")
+```
+
+------------------------------------------------------------------------
+
+tidy up ortho
+
+```{r orthologue key}
+vec_num <- 1:250 
+vec_num1 <- paste0("berghei", vec_num) 
+vec_num2 <- paste0("vivax", vec_num) 
+vec_num3 <- paste0("falciparum", vec_num)
+vec_num4 <- paste0("cynomolgiM", vec_num)
+vec_num5 <- paste0("cynomolgiB", vec_num)
+
+#this is just to create labeled col names to split the orthofinder file. 
+
+orthogroups <- read.delim("genefiles/Orthogroups_20210514.tsv") %>% as_tibble() #this is the raw output from OrthoFinder
+
+orthogroups <- orthogroups %>%  
+select(Orthogroup, PlasmoDB.51_PbergheiANKA_AnnotatedProteins,PlasmoDB.51_PvivaxP01_AnnotatedProteins, PlasmoDB.51_Pfalciparum3D7_AnnotatedProteins, PlasmoDB.51_PcynomolgiM_AnnotatedProteins, PlasmoDB.51_PcynomolgiB_AnnotatedProteins) %>% 
+  #rename berghei
+  mutate(berghei = PlasmoDB.51_PbergheiANKA_AnnotatedProteins) %>% 
+  select(-PlasmoDB.51_PbergheiANKA_AnnotatedProteins) %>% 
+  #rename vivax
+  mutate(vivax = PlasmoDB.51_PvivaxP01_AnnotatedProteins) %>% 
+  select(-PlasmoDB.51_PvivaxP01_AnnotatedProteins) %>% 
+  #rename falciparum
+  mutate(falci = PlasmoDB.51_Pfalciparum3D7_AnnotatedProteins) %>% 
+  select(-PlasmoDB.51_Pfalciparum3D7_AnnotatedProteins) %>% 
+  #rename cynomolgi M
+  mutate(cynoM = PlasmoDB.51_PcynomolgiM_AnnotatedProteins) %>% 
+  select(-PlasmoDB.51_PcynomolgiM_AnnotatedProteins) %>% 
+  #rename cynomolgi B
+    mutate(cynoB = PlasmoDB.51_PcynomolgiB_AnnotatedProteins) %>% 
+  select(-PlasmoDB.51_PcynomolgiB_AnnotatedProteins) %>% 
+  # separate multi ortho strings
+  separate(berghei, into = vec_num1, sep = "," ) %>% 
+  separate(vivax, into = vec_num2, sep = "," ) %>%
+  separate(falci, into = vec_num3, sep = "," ) %>% 
+  separate(cynoM, into = vec_num4, sep = ",") %>% 
+  separate(cynoB, into = vec_num5, sep = ",") %>% 
+  #make long list
+  pivot_longer(-Orthogroup) %>% 
+  drop_na(value) %>% 
+  filter(!value=="") %>% 
+  mutate(value = gsub(".1-p1", "", value)) %>%
+  mutate(value = gsub("-t36", "", value)) %>%
+  mutate(value = gsub("-t26", "", value)) %>%
+    mutate(isoform = case_when(
+  str_detect(value, ".2-p1") ~ TRUE,
+  str_detect(value, ".3-p1") ~ TRUE,
+  TRUE~FALSE
+  )) %>%  
+  # ** remove protein isoforms before removing duplicates so these do not appear as multi-gene 'orthogroups' as it is the same gene... (only relevant for berghei (up to 2 iso) and falciparum (up to 3 iso)...to date...)
+  filter(isoform==FALSE) %>% 
+  mutate(gene = gsub(" ", "", value)) %>% #some of the rows have space - make sure this is GONE!
+  select(!value) %>% 
+  mutate(species = case_when(
+    str_detect(name, "berghei")~"berghei",
+    str_detect(name, "falciparum")~"falciparum",
+    str_detect(name, "cynomolgiM")~"cynomolgiM",
+    str_detect(name, "cynomolgiB")~"cynomolgiB",
+    str_detect(name, "vivax")~"vivax"
+  )) 
+#orthofinder doesn't have any rRNA genes because these are not in the protein fasta file so don't need to double check 
+```
+
+```{r multi gene orthogroups}
+#which orthogroups have only one gene entry grouped by Orthogroup and species
+multi <- orthogroups %>% 
+  filter(!species=="cynomolgi") %>% 
+  group_by(Orthogroup, species) %>% 
+  dplyr::count() %>% 
+  filter(n>1) 
+```
+
+```{r trim orthogroups}
+#################################################################
+#### filter for genes that either have a berghei, falciparum or cyno matched orthologue for vivax (as this is our focus!) #####
+#################################################################
+
+orthogroups <- orthogroups %>% 
+  filter(!Orthogroup%in%multi$Orthogroup) %>% 
+  select(-3,-5) %>% 
+  pivot_wider(names_from = "name", values_from = "gene") %>% 
+  drop_na(vivax1) %>% 
+  pivot_longer(-Orthogroup) %>% 
+  drop_na(value) %>% 
+  group_by(Orthogroup) %>% 
+  add_tally() %>% 
+  filter(n>1)
+
+orthogroups %>% 
+  arrange(n)
+```
+
+```{r relabel}
+orthogroups <- orthogroups %>% 
+  mutate(name = gsub("1", "", name))
+  
+
+orthogroups <- orthogroups %>% 
+  pivot_wider(names_from = "name", values_from = "value") %>% 
+  dplyr::rename(n_entries_ortho = n) %>% 
+  left_join(Pf_genes %>% 
+              dplyr::rename(falciparum = ID)) %>% 
+  left_join(Pb_genes %>% 
+              dplyr::rename(berghei=ID)) %>% 
+  left_join(PcyM_genes %>% 
+              dplyr::rename(cynomolgiM = ID)) %>% 
+  left_join(PcyB_genes %>% 
+              dplyr::rename(cynomolgiB = ID))
+```
+
+```{r merge with Pv_genes}
+Pv_genes <- Pv_genes %>% 
+  left_join(orthogroups %>% 
+              dplyr::rename(ID=vivax))
+```
+
+```{r Import DE genes from the Gural hypnozoite supplementary file}
+gural_de <- readxl::read_excel("genefiles/supplementary/Gural2018_Supplementary1.xlsx", sheet = 2) %>% 
+  clean_names() %>% 
+  mutate(log2fold_change_hyp_mix = as.numeric(log2fold_change_hyp_mix)) %>% 
+  mutate(padj = as.numeric(padj)) %>% 
+  select(gene, log2fold_change_hyp_mix, padj) %>% 
+  filter(padj<0.01) %>% 
+  mutate(gural_de = case_when(
+    log2fold_change_hyp_mix>0 ~ "hypnozoite",
+    TRUE~ "mixedLS"
+  )) %>% 
+  dplyr::rename(ID=gene)
+
+Pv_genes <- Pv_genes %>% 
+  left_join(gural_de)
+```
+
+```{r Import pseudobulk calculations from the Pvspz10x experiment}
+
+#this is calculated in File: 1b_comparisonUTR.Rmd
+pseudo10xpv <- read_csv("outputs/Pv10x_pseudobulk_ranking.csv") %>% select(-1) %>% 
+  select(!cond)
+
+```
+
+```{r}
+Pv_genes <- Pv_genes %>% 
+  left_join(pseudo10xpv %>% 
+              dplyr::rename(ID=gene)) %>% 
+# create logical vector called PvSPZ_10x which will summarise if the gene is detected in 10x experiment or not...
+  mutate(PvSPZ_10x = case_when(
+    ranking_mean!=0 ~ TRUE,
+    TRUE~FALSE
+  ))
+```
+
+```{r Import PvSpz bulk seq from Jex which also include comparison with Zhu blood-stage}
+jex <- read_excel("genefiles/supplementary/Jex2019IJP_SupplementaryD3.xlsx", sheet = 2) %>% 
+  clean_names() %>% 
+  mutate(gene_id = pv_p01_id) %>% 
+  select(-pv_p01_id) %>% 
+  select(mean_cp_ms, mean_tp_ms, gene_id) %>% 
+  arrange(desc(mean_tp_ms))  %>% 
+  mutate(rank = dense_rank(-mean_tp_ms)) %>% 
+  dplyr::rename(ID = gene_id, PvSpz_meanTPM = mean_tp_ms, PvSpzExpressionRank = rank) %>% 
+  filter(!duplicated(ID))
+  
+
+#Aaron has already converted the Zhu analysis (which was with Sal1 to a comparison with PvP01 in the IJP paper and this is supp file sheet 9. We will work with this to provide comparison summary
+blood_stage <- read_excel("genefiles/supplementary/Jex2019IJP_SupplementaryD3.xlsx", sheet = 9) %>% 
+  clean_names() %>% 
+  select(pv_p01_id, log2_dec, s_spz_v_bs) %>% 
+  mutate(gene_id = pv_p01_id) %>% 
+  select(-pv_p01_id) %>% 
+  mutate(PvSpzvsBS = case_when(
+    s_spz_v_bs=="Down-regulated"~ "blood-stage",
+    TRUE ~ "sporozoite"
+  )) %>% 
+  select(!s_spz_v_bs) %>% 
+  dplyr::rename(ID = gene_id, PvSpzBSlog2FC = log2_dec) %>% 
+  filter(!duplicated(ID))
+
+
+Pv_genes <- Pv_genes %>% 
+  left_join(blood_stage) %>% 
+  left_join(jex)
+
+```
+
+```{r}
+Roth <- read_excel("genefiles/supplementary/Roth2018SupplementaryDataset3.xlsx") %>% 
+  clean_names() %>% 
+  select(tracking_id, groups)
+
+Pv_genes <- Pv_genes %>% 
+  left_join(Roth %>% 
+              dplyr::rename(ID=tracking_id) %>% 
+              dplyr::rename(Roth = groups))
+```
+
+```{r scale the rankings so that they are relative}
+range <- function(x, ...){(x - min(x, na.rm = T)) / (max(x, na.rm = T) - min(x, na.rm = T))}
+
+
+Pv_genes <- Pv_genes %>% 
+  mutate(total_sum_normalised = range(total_sum)) %>% 
+  mutate(rank_10x_normalised = range(total_sum_rank)) %>% 
+  mutate(bulk_pv_normalised = range(PvSpz_meanTPM)) %>% 
+  mutate(bulk_pv_rank_normalised = range(PvSpzExpressionRank)) 
+
+```
+
+```{r write 5a_SporozoiteInfo_collated file required for 5b}
+write.csv(Pv_genes, "outputs/5a_SporozoiteInfo_collated.csv")
+```
+
+```{r Supp Table 7}
+Pv_genes %>% 
+  write_csv("tables/S7.csv")
+```
+
+#### References:

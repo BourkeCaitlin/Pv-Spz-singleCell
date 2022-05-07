@@ -1,0 +1,46 @@
+---
+title: "<i>P. vivax</i> single cell RNA seq: normalising the sce object list"
+subtitle: "File: 2a_sceObjectNormalize.Rmd"
+author: "Anthony Ruberto and Caitlin Bourke"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r packages}
+suppressPackageStartupMessages({
+    library(scran)
+    library(scater)
+})
+```
+
+Load filtered SCE objects.
+
+```{r load data}
+all_Pv <- readRDS("outputs/1_all_Pv_filtered.rds")
+```
+
+Normalize by convolution.
+```{r normalize by deconvolution - i. quick cluster }
+set.seed(100)
+
+clust_Pv <- NULL
+dec.all <- NULL
+HVGS <- NULL
+for (i in 1:length(all_Pv)) {
+  clust_Pv[[i]] <- quickCluster(all_Pv[[i]])
+  all_Pv[[i]] <- computeSumFactors(all_Pv[[i]], cluster = clust_Pv[[i]])
+  all_Pv[[i]] <- logNormCounts(all_Pv[[i]])
+  all_Pv[[i]]$librarySizeFactors <- librarySizeFactors(all_Pv[[i]])
+  dec.all[[i]] <- modelGeneVar(all_Pv[[i]])
+  HVGS[[i]] <- getTopHVGs(dec.all[[i]], prop=0.1)
+}
+
+```
+
+Save normalized SCE objects.
+
+```{r save single-cell objects}
+saveRDS(all_Pv, "outputs/2a_all_Pv.rds")
+```
+
+

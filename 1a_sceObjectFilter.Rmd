@@ -1,0 +1,314 @@
+---
+title: "<i>P. vivax</i> single cell RNA seq: importing raw files and preparing data"
+subtitle: "File: 1a_sceObjectFilter.Rmd"
+author: "Anthony Ruberto and Caitlin Bourke"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Load libraries.
+```{r packages}
+suppressPackageStartupMessages({
+  library(scran)
+  library(scater)
+  library(BiocSingular)
+  library(pheatmap)
+  library(ggpubr)
+  library(RColorBrewer)
+  library(gridExtra)
+  library(tidyverse)
+  library(scales)
+  library(ggExtra)
+  library(patchwork)
+  library(rtracklayer)
+  library(readxl)
+})
+```
+
+Load data from `/outputs`.
+```{r load data}
+all_Pv <- readRDS("outputs/0_all_Pv.rds")
+```
+
+```{r Pv gene data from v51 datafile PlasmoDB}
+Pv_genes<-import.gff3("genefiles/PlasmoDB-51_PvivaxP01.gff") %>% 
+  as_tibble() %>% 
+  select(ID, description) %>% 
+  mutate(GeneSeurat = gsub("_", "-", ID)) %>% 
+  mutate(GeneDescription = paste0(ID, "::", description))
+
+Pv_genes$description<-gsub('\\+', ' ', Pv_genes$description)
+Pv_genes$GeneDescription<-gsub('\\+', ' ', Pv_genes$GeneDescription)
+Pv_genes<-Pv_genes[ends_with(".1",vars=Pv_genes$ID),]
+Pv_genes[]<- lapply(Pv_genes, gsub, pattern = ".1", replacement = "", fixed = TRUE)
+```
+
+```{r add per cell info - including percent uis}
+Pv_UIS<- read_excel("genefiles/UIS_PvP01.xlsx", sheet = "Sheet2")
+is.uis<-Pv_UIS$Gene
+
+for (i in 1:length(all_Pv)){
+  all_Pv[[i]] <- addPerCellQC(all_Pv[[i]], subsets=list(uis=is.uis))
+  all_Pv[[i]] <- addPerFeatureQC(all_Pv[[i]], detection_limit = 0)
+}
+```
+
+Pre-filtering visualization part I. Highlight outliers.
+```{r filter high count, fig.width=6, fig.height=8}
+Pv_meta <- NULL
+for (i in 1:length(all_Pv)) {
+  Pv_meta[[i]] <- as.data.frame(colData(all_Pv[[i]]))
+}
+Pv_meta <- lapply(Pv_meta, function(i){
+  mutate(i, keep = case_when(detected<60 ~ TRUE,
+           TRUE~ FALSE
+  ))
+})
+```
+
+Pre-filtering visualization part  II. Visualise some QC stats pre cell filtering.
+```{r vizualization pre-cell filtering, fig.height=5, fig.width=5}
+rep_id <- list("Pv1", "Pv2", "Pv3")
+
+histogram_density_plots_sum <- lapply(seq_along(Pv_meta),function(i){
+  ggplot(Pv_meta[[i]], aes(x=sum)) +
+    geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+    geom_density(alpha=0.6)+
+    scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+    scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+    labs(title=rep_id[i], x="Sum", y = "Density")+
+    theme_linedraw()+
+    border()+
+    scale_x_log10(limits=c(50,4000))+
+    scale_y_continuous(limits = c(0,5))
+})
+
+histogram_density_plots_detected <- lapply(seq_along(Pv_meta),function(i){
+  ggplot(Pv_meta[[i]], aes(x=detected)) +
+geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+geom_density(alpha=0.6)+
+scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+labs(title=rep_id[i], x="Genes per sporozoite", y = "Density") +
+    theme_linedraw() +
+    border() +
+    scale_x_log10(limits=c(50,1000)) +
+  scale_y_continuous(limits = c(0,6))
+})
+
+histogram_density_plots_uis <- lapply(seq_along(Pv_meta),function(i){
+  ggplot(Pv_meta[[i]], aes(x=subsets_uis_percent)) +
+geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+geom_density(alpha=0.6)+
+scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+labs(title=rep_id[i], x="% UIS", y = "Density") +
+    theme_linedraw() +
+    border() +
+    scale_x_log10() +
+  scale_y_continuous(limits = c(0,2.5))
+})
+
+UMI_gene_plots_filt <- lapply(seq_along(Pv_meta), function(i){
+  ggplot(Pv_meta[[i]], mapping = aes(x = sum, y = detected, colour = !keep)) +
+  geom_jitter(alpha = 0.35)+
+  theme_linedraw()+
+  scale_x_log10()+
+  scale_y_log10()+
+  labs(title = rep_id[i], x ="Total UMIs", y = "Genes detected")
+})
+
+(histogram_density_plots_sum[[1]]+histogram_density_plots_sum[[2]]+histogram_density_plots_sum[[3]])/
+(histogram_density_plots_detected[[1]]+histogram_density_plots_detected[[2]]+histogram_density_plots_detected[[3]])/
+(histogram_density_plots_uis [[1]]+histogram_density_plots_uis [[2]]+histogram_density_plots_uis [[3]])/
+  (UMI_gene_plots_filt[[1]]+UMI_gene_plots_filt[[2]]+UMI_gene_plots_filt[[3]])+
+plot_annotation(title = 'Density distributions of cell libraries prior to filtering',tag_levels = 'A')
+
+```
+Filter out genes that show low expression. 
+
+##### FILTER DATASET
+
+```{r filter cells less than 60 genes}
+outliers <- NULL
+for (i in 1:length(all_Pv)) {
+  outliers[[i]] <- colData(all_Pv[[i]])$detected < 60
+}
+
+# subset
+for (i in 1:length(all_Pv)){
+  all_Pv[[i]] <- all_Pv[[i]][ ,!(outliers[[i]])]
+}
+
+# remove gene rows (3 counts in two cells)
+for (i in 1:length(all_Pv)){
+  all_Pv[[i]] <- all_Pv[[i]][rowSums(counts(all_Pv[[i]])>2)>1, ]
+}
+
+```
+
+The SCE objects have been modified. Thus we need to recalculate the per cell and per feature metrics. These new values will give us the final metrics for the trimmed SCE objects. These are now names as 'preFilterSum' and 'preFilterDetected'. 
+
+```{r reculaculate QC per cell metrics}
+
+colData(all_Pv[[1]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_Pv[[1]])[,4:5]
+colData(all_Pv[[1]])[,4:9]<-NULL
+# 
+colData(all_Pv[[2]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_Pv[[2]])[,4:5]
+colData(all_Pv[[2]])[,4:9]<-NULL
+# 
+colData(all_Pv[[3]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_Pv[[3]])[,4:5]
+colData(all_Pv[[3]])[,4:9]<-NULL
+# 
+
+
+rowData(all_Pv[[1]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_Pv[[1]])[,5:6]
+rowData(all_Pv[[1]])[,5:6]<-NULL
+# 
+rowData(all_Pv[[2]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_Pv[[2]])[,5:6]
+rowData(all_Pv[[2]])[,5:6]<-NULL
+# 
+rowData(all_Pv[[3]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_Pv[[3]])[,5:6]
+rowData(all_Pv[[3]])[,5:6]<-NULL
+# 
+
+```
+
+```{r calculate new QC info on filtered objects}
+is.uis<-Pv_UIS$Gene
+is.uis[(is.uis %in% rowData(all_Pv[[i]])$ID)] 
+
+for (i in 1:length(all_Pv)){
+  all_Pv[[i]] <- addPerCellQC(all_Pv[[i]], subsets=list(uis=is.uis[(is.uis %in% rowData(all_Pv[[i]])$ID)] ))
+  all_Pv[[i]] <- addPerFeatureQC(all_Pv[[i]], detection_limit = 0)
+}
+```
+
+Add some supplementary metrics for each of the cells.
+
+```{r add supplementary column metadata}
+add_supp_meta <- function(ds){
+  ds$total_features <- ds$detected
+  ds$log10_total_features <- log10(ds$detected)
+  ds$total_counts <- ds$sum
+  ds$log10_total_counts <- log10(ds$sum+1)
+  ds$featcount_ratio <- ds$log10_total_counts/ds$log10_total_features
+  ds$pct_counts_top_50_features <- ds$percent_top_50
+  ds
+}
+
+for (i in 1:length(all_Pv)){
+  all_Pv[[i]] <- add_supp_meta(all_Pv[[i]])
+}
+
+```
+
+Revisualize the data post-filtering.
+
+```{r vizualization post-cell and gene filtering, fig.width=6, fig.height=15}
+
+Pv_meta_2 <- NULL
+for (i in 1:length(all_Pv)) {
+  Pv_meta_2[[i]] <- as.data.frame(colData(all_Pv[[i]]))
+}
+ 
+Pv_meta_2 <- lapply(Pv_meta_2, function(i){
+  mutate(i, keep = case_when(
+           detected<60 ~ TRUE,
+           TRUE~ FALSE
+  ))
+})
+ 
+
+####################
+####################
+rep_id <- list("Pv1", "Pv2", "Pv3")
+
+histogram_2_density_plots_sum <- lapply(seq_along(Pv_meta_2),function(i){
+  ggplot(Pv_meta_2[[i]], aes(x=sum)) +
+    geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+    geom_density(alpha=0.6)+
+    scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+    scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+    labs(title=rep_id[i], x="Sum", y = "Density")+
+    theme_linedraw()+
+    border()+
+    scale_x_log10(limits=c(50,4000))+
+    scale_y_continuous(limits = c(0,5))
+})
+histogram_2_density_plots_detected <- lapply(seq_along(Pv_meta_2),function(i){
+  ggplot(Pv_meta_2[[i]], aes(x=detected)) +
+geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+geom_density(alpha=0.6)+
+scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+labs(title=rep_id[i], x="Genes per sporozoite", y = "Density") +
+    theme_linedraw() +
+    border() +
+    scale_x_log10(limits=c(50,1000)) +
+  scale_y_continuous(limits = c(0,6))
+})
+
+histogram_2_density_plots_uis <- lapply(seq_along(Pv_meta_2),function(i){
+  ggplot(Pv_meta_2[[i]], aes(x=subsets_uis_percent)) +
+geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+geom_density(alpha=0.6)+
+scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+labs(title=rep_id[i], x="% UIS", y = "Density") +
+    theme_linedraw() +
+    border() +
+    scale_x_log10() +
+  scale_y_continuous(limits = c(0,2.5))
+})
+
+UMI_gene_plots_filt <- lapply(seq_along(Pv_meta_2), function(i){
+  ggplot(Pv_meta_2[[i]], mapping = aes(x = sum, y = detected, colour = !keep)) +
+  geom_jitter(alpha = 0.35)+
+  theme_linedraw()+
+  scale_x_log10()+
+  scale_y_log10()+
+  labs(title = rep_id[i], x ="Total UMIs", y = "Genes detected")
+})
+
+(histogram_density_plots_sum[[1]]+histogram_density_plots_sum[[2]]+histogram_density_plots_sum[[3]])/
+(histogram_density_plots_detected[[1]]+histogram_density_plots_detected[[2]]+histogram_density_plots_detected[[3]])/
+(histogram_density_plots_uis [[1]]+histogram_density_plots_uis [[2]]+histogram_density_plots_uis [[3]])/
+  (UMI_gene_plots_filt[[1]]+UMI_gene_plots_filt[[2]]+UMI_gene_plots_filt[[3]])/
+(histogram_2_density_plots_sum[[1]]+histogram_2_density_plots_sum[[2]]+histogram_2_density_plots_sum[[3]])/
+  (UMI_gene_plots_filt[[1]]+UMI_gene_plots_filt[[2]]+UMI_gene_plots_filt[[3]])+
+plot_annotation(title = 'Density distributions of cell libraries post filtering',tag_levels = 'A')
+```
+Add some other metadata:
+
+```{r extra metadata}
+day <- c("16", "18", "17")
+media <- c("HBSS", "HBSS", "HBSS")
+
+for (i in 1:length(all_Pv)) {
+  colData(all_Pv[[i]])$Day <- day[i]
+  colData(all_Pv[[i]])$Stage <- "Sporozoite"
+  colData(all_Pv[[i]])$location<-"Salivary Gland"
+  colData(all_Pv[[i]])$species<-"Vivax"
+  colData(all_Pv[[i]])$media <- media[i]
+}
+```
+
+```{r create table of cell/gene count info from filtered dataset}
+dims <-NULL
+for (i in 1:length(all_Pv)) {
+  dims[[i]] <- dim(all_Pv[[i]])
+}
+
+dims <- data.frame(dims)
+colnames(dims) <- rep_id
+rownames(dims) <- c("Genes confidently detected", "Number of cells")
+
+knitr::kable(dims)
+```
+
+Save the outputs.
+```{r save filter sce}
+saveRDS(all_Pv, "outputs/1a_all_Pv_filtered.rds")
+```
+Proceed to next notebook.

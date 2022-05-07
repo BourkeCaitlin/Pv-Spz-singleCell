@@ -1,0 +1,357 @@
+---
+title: "P. vivax single cell RNA seq: comparing *P. vivax* sporozoites to other species: interpreting developmental trajectory"
+subtitle: "File: 4_sceTrajectory.Rmd"
+output: html_document
+---
+
+```{r setup}
+suppressPackageStartupMessages({
+  library(tradeSeq)
+  library(Seurat)
+  library(slingshot)
+  library(ggpubr)
+  library(dplyr)
+  library(ggridges)
+  library(ggsci)
+  library(viridis)
+  library(pheatmap)
+  library(patchwork)
+  library(ggplotify)
+})
+source("scripts/functions_aesthetics.R")
+source("scripts/geneInfo.R")
+```
+
+```{r read in data from clustering doc 3}
+Pv<-readRDS("outputs/3_ClusteringSeurat.Rds")
+DefaultAssay(Pv) <- "originalexp"
+```
+
+```{r where is s10 expressed, fig.width=8, fig.height=3}
+#sporozoite specific marker S10 (marker of midgut/early)- evidently in small cluster 
+s10 <- FeaturePlot(
+    Pv,
+    features = 'PVP01-0304200',
+    pt.size = 1,
+    order = T)+
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) + tenx_theme_genePlots()+
+    labs(title = "S10", subtitle = "PVP01_0304200")
+cluster0.1 <- DimPlot(
+    Pv,
+    group.by = "CCA_snn_res.0.1",
+    dims = c(1, 2),
+    pt.size = 1
+  )  + scale_color_lancet() +
+    tenx_theme_genePlots() +
+    labs("clustering 0.1")+
+    theme(legend.position = "none")
+s10+cluster0.1+plot_layout(ncol = 2)
+ggsave("plots/s10_pseudotime.tiff", width = 20, height = 7, units = "in", dpi = 320)
+
+```
+We will use the clusters derived from the LEIDEN community detection algorithm using a resolution of 0.1 to predict lineage(s).
+```{r create matrix for Slingshot input}
+# Save the objects as separate matrices for input in slingshot
+dimred <- Pv@reductions$UMAP_on_CCA@cell.embeddings
+clustering <- Pv$CCA_snn_res.0.1
+counts <- as.matrix(Pv@assays$originalexp@data)
+```
+
+Determine the lineages in the data. From the DE expression analysis we predicted that cluster 3 most likely encodes for immature sporozoites. With this information we can assign a 'start cluster' in the getLineages(). This will guide the forest structure inference on the clusters.
+
+```{r lineage identification}
+# Run default Slingshot lineage identification
+set.seed(176451)
+lineages <- getLineages(data = dimred, clusterLabels = clustering, start.clus = 3)
+lineages_object <- as.SlingshotDataSet(lineages)
+DimPlot(Pv, group.by ="CCA_snn_res.0.1", dims = c(1,2))+
+  scale_color_lancet()+
+  tenx_theme()
+```
+
+```{r plot lineages}
+# Plot the lineages
+par(mfrow = c(1, 2))
+pal3 <- pal_lancet("lanonc")(9)
+plot(dimred[, 1:2], col = pal3[clustering], cex = 0.5, pch = 16)
+for (i in levels(clustering)) {
+    text(mean(dimred[clustering == i, 1]), mean(dimred[clustering == i, 2]), labels = i, font = 2)
+}
+plot(dimred[, 1:2], col = pal3[clustering], cex = 0.5, pch = 16)
+lines(lineages_object, lwd = 3, col = "black") 
+```
+```{r find principal curves}
+curves <- getCurves(lineages, stretch = 0, thres = 0.001)
+curves
+curves_object <- as.SlingshotDataSet(curves)
+plot(dimred[,c(1,2)], col = pal3[clustering], asp = 1, pch = 16, cex = 0.2)
+lines(curves_object, lwd = 2, col = c("black" ))
+```
+
+```{r GAM fitting}
+sce <- fitGAM(counts = counts, sds = curves)
+# How many genes converged? Lineage predicted.
+table(rowData(sce)$tradeSeq$converged)
+```
+
+```{r Figures for 4a}
+#assign 
+Pv$slingshot1<-sce$tradeSeq$dm$t1
+curve_gg <- slingCurves(curves_object)[[1]]$s[slingCurves(curves_object)[[1]]$ord, ] %>% as_tibble()
+  
+fig4a_1<-FeaturePlot(
+  Pv, 
+  features = "slingshot1") + 
+  scale_color_viridis() + 
+  geom_path(data = curve_gg, aes(x = UMAP_1, y = UMAP_2), size = 2)+
+  theme_void()+
+  labs(title = "")+
+  theme(legend.position = "none",
+        plot.margin = unit(c(0,0,0,1), "cm"))
+Pv %>% 
+  tidyseurat::ggplot(aes(sum, fill = Day)) + 
+  geom_histogram(alpha = 0.5, position = "identity") +
+  scale_fill_lancet() + 
+  facet_grid(Replicate ~ .)
+fig4a_2 <- Pv %>%
+  tidyseurat::ggplot(aes(x = slingshot1, y = label, fill = stat(x))) +
+  geom_density_ridges_gradient(scale = 2) +
+  scale_fill_viridis_c(
+    alpha = 0.8,
+    guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+  scale_y_discrete(expand = c(1, 0.001)) + theme_minimal() +
+  tenx_theme()+
+  labs(x = "Pseudotime", y = "")+
+  theme(legend.position = "none",
+        panel.grid.major.x = element_line(colour = "grey"),
+        panel.border = element_blank(),
+        plot.margin = unit(c(0,1,0,0), "cm"))
+  
+ptime2<-Pv %>%
+  tidyseurat::ggplot(aes(x = slingshot1, y = species, fill = stat(x))) +
+  geom_density_ridges_gradient() + scale_fill_viridis_c(
+    alpha = 1,
+    name = "Slingshot pseudotime",
+    guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")
+  ) + border() + scale_y_discrete() + theme_minimal() + theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    axis.title = element_blank(),
+    axis.text.y = element_blank()
+  )
+# save figure 4a - distribution of cells across pseudotime
+fig4a_2+fig4a_1+plot_layout(ncol = 2)
+# ggsave("plots/figure4a.png", width = 20, height = 7, units = "in")
+```
+
+Lets highlight genes significantly different over pseudotime. We wil first look at genes changing at any time point.
+
+```{r differentially expressed genes over pseudotime I: association test}
+# Association test - checking gene expression sig DE along time
+pseudotime_association <- associationTest(sce, l2fc = 0)
+pseudotime_association$fdr <- p.adjust(pseudotime_association$pvalue, method = "fdr")
+pseudotime_association <- pseudotime_association[order(pseudotime_association$fdr), ]
+
+# Total association test - red points are genes with FDR <=0.01
+SupFig4b <- ggplot(pseudotime_association, aes(x =meanLogFC , y = waldStat+1))+
+ geom_point(data = subset(pseudotime_association, fdr > 0.01), color = "black", alpha = 0.5, size =1)+
+  geom_point(data = subset(pseudotime_association, fdr <= 0.01), color = "red", alpha = 0.5, size =1)+
+  scale_y_log10()+
+  scale_x_log10()+
+  tenx_theme()+
+  theme(panel.grid.major = element_line(colour = "grey"))
+```
+
+Next, we will look at genes that are significantly different from timepoint = 0.
+
+```{r differentially expressed genes over pseudotime II: startVsEndTest}
+#startvsEndTest: DE end to start ("progenitor markers")
+startRes <- startVsEndTest(sce, l2fc=0)
+startRes$FDR<-p.adjust(startRes$pvalue, "fdr")
+startRes<-startRes[order(startRes$waldStat, decreasing = T),]
+# Total startEnd
+SupFig4c <- ggplot(startRes, aes(x = logFClineage1 , y = waldStat+1))+
+ geom_point(data = subset(startRes, FDR > 0.01), color = "black", alpha = 0.5, size =1)+
+  geom_point(data = subset(startRes, FDR <= 0.01), color = "red", alpha = 0.5, size =1)+
+  scale_y_log10()+
+  tenx_theme()+
+  theme(panel.grid.major = element_line(colour = "grey"))
+```
+
+```{r pseudotime + expression}
+#import output from file 1b where the pseudobulking sum of the replicates was done
+pseudo_ranking <- read_csv("outputs/Pv10x_pseudobulk_ranking.csv") %>% select(-1)
+	
+#join the pseudotime association est to the pseudobulk calculations
+combined_pseudo <- pseudotime_association %>% 
+  as_tibble(rownames = "gene") %>% 
+  mutate(gene = gsub("-", "_", gene)) %>% 
+  dplyr::rename(waldStat_association = waldStat) %>% 
+  dplyr::rename(df_association = df) %>% 
+  dplyr::rename(pvalue_association = pvalue) %>% 
+  dplyr::rename(meanLogFC_association = meanLogFC) %>% 
+  dplyr::rename(fdr_association = fdr) %>% 
+  full_join(startRes %>% 
+    as_tibble(rownames = "gene") %>% 
+    mutate(gene = gsub("-", "_", gene)) %>% 
+      dplyr::rename(waldStat_startend = waldStat) %>% 
+      dplyr::rename(df_startend = df) %>% 
+      dplyr::rename(pvalue_started = pvalue) %>% 
+      dplyr::rename(logFClineage1_startend = logFClineage1) %>%
+      dplyr::rename(FDR_startend = FDR)) %>% 
+  left_join(pseudo_ranking) %>% 
+  left_join(Pv_genes %>% 
+              dplyr::rename(gene=ID))
+	
+
+combined_pseudo %>% 
+  filter(fdr_association<0.01)
+
+# write out tables
+# write.table(pseudotime_association, file = "outputs/pseudotime_association.txt", sep = "\t",row.names = TRUE, col.names = NA)
+# write.table(startRes, file = "outputs/startRes.txt", sep = "\t",row.names = TRUE, col.names = NA)
+```
+
+
+```{r add additional filtering columns for filtering}
+combined_pseudo <- combined_pseudo %>% 
+  mutate(stat_fdr0.01 = case_when(
+    fdr_association<0.01 | FDR_startend<0.01 ~ TRUE,
+    TRUE~FALSE
+  ))#add column for FDR threshold of 0.01 for either the startEnd test or the association test
+  
+combined_pseudo <- combined_pseudo %>% 
+  filter(stat_fdr0.01==TRUE) %>% 
+  #########################################
+########## TOP WALD###############
+  mutate(plot1_association_topWald = case_when(
+    waldStat_association>100  ~ TRUE,
+    TRUE~FALSE
+  )) %>% 
+  mutate(plot2_association_topWald_topEprx = case_when(
+    waldStat_association>100 & mean_over_reps>500 ~ TRUE,
+    TRUE~FALSE
+  )) %>% 
+  mutate(plot3_startEnd_topWald = case_when(
+    waldStat_startend>10 ~TRUE,
+    TRUE~FALSE
+  )) %>% 
+  mutate(plot4_startEnd_posLineage = case_when(
+    logFClineage1_startend<0 & waldStat_startend >1 ~ TRUE,
+    TRUE~FALSE
+  )) %>% 
+  ############## skew for mean LogFC
+  mutate(rank_meanLogFC = case_when(
+    fdr_association<0.01 ~ dense_rank(-meanLogFC_association)
+  )) %>% 
+  mutate(rank_meanLogFC= dense_rank(rank_meanLogFC)) %>% 
+  mutate(rank_Wald_association = case_when(
+    fdr_association<0.01 ~ dense_rank(-waldStat_association)
+  )) %>% 
+  mutate(rank_Wald_association = dense_rank(rank_Wald_association)) %>% 
+  mutate(rank_Wald_startEnd = case_when(
+    FDR_startend<0.01 ~ dense_rank(-waldStat_startend)
+  )) %>% 
+  mutate(rank_Wald_startEnd = dense_rank(rank_Wald_startEnd))
+```
+
+```{r tidy function for plotting, fig.width=9}
+# plotGeneCount(curves, counts, clusters = clustering, models = sce)+border()+scale_color_lancet()+NoLegend()
+
+plot_heatmap_pseudotime  <- function(x) {
+  
+yhatSmooth <- predictSmooth(sce, gene = filter(combined_pseudo,{{x}} ==TRUE)$GeneSeurat, nPoints = 50, tidy = FALSE)
+heatSmooth <- pheatmap(t(scale(t(yhatSmooth[, 1:50]))),
+                       cluster_cols = F,
+                       cluster_rows = T,
+                       show_rownames = T, 
+                       show_colnames = FALSE, color = inferno(100),
+                       labels_row = filter(combined_pseudo,{{x}} ==TRUE)$GeneDescription,
+                       border_color = NA,
+                       fontsize = 15)
+}
+```
+
+```{r Heatmap plots, fig.width=20}
+as.ggplot(plot_heatmap_pseudotime(plot1_association_topWald))
+as.ggplot(plot_heatmap_pseudotime(plot2_association_topWald_topEprx))
+as.ggplot(plot_heatmap_pseudotime(rank_meanLogFC<150 & waldStat_association>20)) #highlight novel early markers of 
+as.ggplot(plot_heatmap_pseudotime(rank_Wald_startEnd<40))
+as.ggplot(plot_heatmap_pseudotime(rank_Wald_association<70 & fdr_association <0.01 & mean_over_reps>1000))
+as.ggplot(plot_heatmap_pseudotime(waldStat_association>200 & fdr_association <0.01 & mean_over_reps>1000))
+as.ggplot(plot_heatmap_pseudotime(rank_meanLogFC<=20))
+as.ggplot(plot_heatmap_pseudotime(waldStat_startend>100 & mean_over_reps >1000 & FDR_startend<0.01))
+
+wald_check <- combined_pseudo %>% 
+  filter(waldStat_association>200 & fdr_association <0.01 & mean_over_reps>2000 )
+
+min(wald_check$waldStat_association)
+
+as.ggplot(plot_heatmap_pseudotime(rank_meanLogFC<30))
+
+combined_pseudo %>% 
+  filter(rank_meanLogFC<30)
+
+#Fig 4c heatmap
+fig4c <- as.ggplot(plot_heatmap_pseudotime(waldStat_association>200 & fdr_association <0.01 & mean_over_reps>2000))
+SupFig4a <- as.ggplot(plot_heatmap_pseudotime(rank_meanLogFC<30 & waldStat_association>30))
+SupFig4ba <- as.ggplot(plot_heatmap_pseudotime(waldStat_startend>100 & mean_over_reps >1000 & FDR_startend<0.01))
+```
+
+
+```{r write Supp table 6}
+combined_pseudo %>% 
+  filter(fdr_association<0.01) %>% 
+  select(gene, description, waldStat_association, df_association, pvalue_association, meanLogFC_association, fdr_association, mean_over_reps, ranking_mean, total_sum, total_sum_rank, Pv1, ranking_pv1,Pv2, ranking_pv2, Pv3, ranking_pv3) %>% 
+  write_csv("tables/S6.csv")
+```
+
+```{r setup data for plotting pseudotime}
+gbm <- as.matrix(Pv@assays$originalexp@data)
+gbm <- as.data.frame(as.matrix(t(gbm)))
+colnames(gbm)<-gsub('\\-', '_', colnames(gbm))
+gbm$Pseudo<-Pv$slingshot1
+gbm$Label<-Pv$CCA_snn_res.0.1
+gbm$Day<-Pv$Day
+gbm$label<-Pv$label
+gbm<-gbm[order(gbm$Pseudo),]
+```
+
+```{r plot pseudotime}
+#example
+ggplot(gbm, aes(x =Pseudo, y =  PVP01_1011800 , color = Pseudo))+
+  geom_point(alpha = 0.5)+
+  scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+  geom_smooth( span = 0.2)
+ggplot(gbm, aes(x =Pseudo, y =  PVP01_1011800 , color = Pseudo))+
+  geom_point(alpha = 0.5)+
+  scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+  geom_smooth( span = 0.2)
+#total
+ggplot(pseudotime_association, aes(x =meanLogFC, y =  waldStat , color = fdr))+
+  geom_point(alpha = 0.5)+
+  scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+  scale_y_log10()+theme_linedraw()+border()
+```
+
+***
+## Plots for manuscript
+```{r fig.width=10, fig.height=10}
+fig4_layout = "
+AABB
+AABB
+CCC#
+CCC#
+CCC#
+CCC#
+CCC#
+CCC#
+CCC# 
+"
+fig4a_1+fig4a_2+fig4c+plot_layout(design = fig4_layout)+plot_annotation(tag_levels = "A") & theme(plot.tag = element_text(size = 40, face = "bold"))
+ggsave("plots/figure4.tiff", width = 20, height = 25, units = "in", dpi= 320)
+```
+
+```{r save object}
+saveRDS(sce, "outputs/4_sceTrajectory.rds")
+```

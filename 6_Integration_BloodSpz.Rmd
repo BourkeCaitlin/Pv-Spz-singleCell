@@ -1,0 +1,395 @@
+---
+title: "<i>P. vivax</i> single cell RNA seq: importing raw files and preparing data"
+subtitle: "File: 6_Integration_BloodSpz.Rmd"
+author: "Anthony Ruberto and Caitlin Bourke"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r load packages}
+suppressPackageStartupMessages({
+library(Seurat)
+library(cowplot)
+library(ggplot2)
+library(venn)
+library(viridis)
+library(ggrepel)
+library(ggpubr)
+})
+
+source("scripts/functions_aesthetics.R")
+source("scripts/geneInfo.R")
+```
+
+Load the data from the previous notebook. At this point we will also create a Seurat object and use this format downstream processining.
+```{r load data Pv Spz}
+PvSPZ<-readRDS("outputs/3_ClusteringSeurat.Rds")
+PvBS<-readRDS("data/Sa_bloodStage/7_PvBSInt_NoT_CCA.rds")
+
+PvBS@assays$originalexp <- PvBS@assays$RNA #this is needed at the FInd Markers step 
+```
+
+Merge datasets into GIANT list 
+```{r make list}
+DefaultAssay(PvSPZ) <- "originalexp"
+DefaultAssay(PvBS) <- "originalexp"
+
+PvBS$Replicate<-PvBS$Sample
+PvBS$Stage<-"BloodStage"
+
+
+PvSPZ_BS.list<-list(PvSPZ, PvBS)
+
+for (i in 1:length(PvSPZ_BS.list )) {
+    PvSPZ_BS.list[[i]] <- FindVariableFeatures(PvSPZ_BS.list [[i]], selection.method = "vst",
+                                               nfeatures = nrow(PvSPZ_BS.list[[i]])*.3)
+}
+
+features <- SelectIntegrationFeatures(object.list = PvSPZ_BS.list)
+PvSPZ_BS.list <- lapply(X = PvSPZ_BS.list, FUN = function(x) {
+    x <- ScaleData(x, features = features, verbose = FALSE)
+    x <- RunPCA(x, features = features, verbose = FALSE)
+})
+
+
+#integrate spz and blood-stage
+options(future.globals.maxSize = 8000 * 1024^2)
+set.seed(198384)
+PvSPZ_BS.anchors <- FindIntegrationAnchors(object.list = PvSPZ_BS.list, anchor.features = features, reduction = "rpca", verbose = F)
+set.seed(198384)
+# this command creates an 'integrated' data assay
+PvSPZ.BS.combined <- IntegrateData(anchorset = PvSPZ_BS.anchors, verbose = T)
+```
+
+Perform data reduction on the integrated data.
+```{r data reduction on integrated dataset}
+# specify that we will perform downstream analysis on the corrected data note that the original
+# unmodified data still resides in the 'RNA/originalexp' assay
+
+DefaultAssay(PvSPZ.BS.combined) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+PvSPZ.BS.combined <- ScaleData(PvSPZ.BS.combined, verbose = FALSE)
+PvSPZ.BS.combined <- RunPCA(PvSPZ.BS.combined, npcs = 30, verbose = FALSE)
+ElbowPlot(PvSPZ.BS.combined)
+PvSPZ.BS.combined <- RunUMAP(PvSPZ.BS.combined, umap.method = "umap-learn", dims = 1:30)
+PvSPZ.BS.combined.3D <- RunUMAP(PvSPZ.BS.combined, umap.method = "umap-learn", dims = 1:30, n.components = 3L, seed.use = 92181384, min.dist = 0.5)
+
+
+```
+
+```{r pv spz bs integrated viz, fig.width=10}
+# Visualization
+p1 <- DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "Stage") + 
+  tenx_theme()+
+  theme(panel.grid.major = element_line(colour = "grey"))
+p2 <- DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "Replicate") + 
+  scale_color_d3()+
+  tenx_theme()+
+  theme(panel.grid.major = element_line(colour = "grey"))
+p1 + p2
+
+ggarrange(
+  PvSPZ.BS.combined %>%ggplot(aes(UMAP_1, UMAP_2)) +
+  geom_point(color = "black", alpha = 0.25 ,size = 0.1)+facet_grid(.~PvSPZ.BS.combined$Replicate, scales = "fixed")+
+  ylab("UMAP2")+xlab("UMAP1")+
+  geom_density2d(size = 0.25, colour = "red", alpha = 0.75)+border()+theme_linedraw()+
+  theme(strip.background = element_blank(), strip.text.y = element_blank()),
+  
+  PvSPZ.BS.combined %>%ggplot(aes(UMAP_1, UMAP_2, color = Stage)) +
+  geom_point( alpha = 0.5 ,size = 0.5)+
+  ylab("UMAP2")+xlab("UMAP1")+
+  geom_density2d(size = 1, colour = "red", alpha = 0.75)+border()+theme_linedraw()+
+  theme(strip.background = element_blank(), strip.text.y = element_blank())+
+  ylab("UMAP2")+xlab("UMAP1")+
+  scale_color_manual(values=c("#00468BFF", "#42B540FF"))+
+  NoLegend(), 
+  
+  common.legend = F, nrow = 2, ncol = 1, heights = c(1,2), align = "hv")+ 
+  theme(legend.position = "none")
+
+```
+
+Perform graph-based clustering.
+```{r GB clustering}
+
+PvSPZ.BS.combined <- FindNeighbors(PvSPZ.BS.combined,
+                         reduction = "pca",
+                         dims = 1:30,
+                         k.param = 60,
+                         prune.SNN = 1/15)
+
+names(PvSPZ.BS.combined@graphs)
+
+```
+
+```{r save object}
+saveRDS(PvSPZ.BS.combined,"outputs/6_PvSPZ.BS.combined.rds")
+# PvSPZ.BS.combined<- readRDS("outputs/6_PvSPZ.BS.combined.rds")
+```
+
+Let's find clusters using various resolutions. We will use the Leiden algorithm to detect communities. Despite taking some extra time to run. This algorithm builds on the Louvain algorithm and hashes out some of its pitfalls.
+
+```{r find cluster - on graph, fig.width=2, fig.height=2}
+
+for (res in c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8 ,0.9, 1)) {
+   PvSPZ.BS.combined<- FindClusters(PvSPZ.BS.combined, resolution = res, algorithm = 4, verbose = FALSE)
+}
+
+PvSPZ.BS.combined<- FindClusters(PvSPZ.BS.combined, resolution = 0.3, algorithm = 4, verbose = FALSE)
+
+clustree(PvSPZ.BS.combined, node_colour = "sc3_stability")
+
+plot_grid(nrow = 5, ncol=2,
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.1")+NoLegend(),
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.2")+NoLegend(),      
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.3")+NoLegend(),
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.4")+NoLegend(),
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.5")+NoLegend(),
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.6")+NoLegend(),
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.7")+NoLegend(),
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.8")+NoLegend(),
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.9")+NoLegend(),
+  DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.1")+NoLegend()
+)
+
+FeaturePlot(PvSPZ.BS.combined, feature = "log10_total_counts", dims = c(1,2))
+
+DimPlot(PvSPZ.BS.combined, reduction = "umap", group.by = "integrated_snn_res.0.3")
+```
+
+
+```{r de testing}
+#set Ident - first find global markers between the stages
+PvSPZ.BS.combined <- SetIdent(PvSPZ.BS.combined, value = "Stage")
+print(PvSPZ.BS.combined@active.ident[10:20])
+
+```
+
+Let's look at per cluster metrics.
+
+```{r per cluster metrics}
+
+ggarrange(
+VlnPlot(PvSPZ.BS.combined, features = "nFeature_RNA", pt.size = 0)+border()+scale_y_log10()+scale_fill_lancet()+theme_linedraw()+NoLegend()+geom_boxplot(fill = "white",width=0.05, outlier.size = 0.1, outlier.alpha = 0.5)+
+  theme(text = element_text(size=20)),
+VlnPlot(PvSPZ.BS.combined, features = "nCount_RNA", pt.size = 0) + border() +
+  scale_y_log10() + scale_fill_lancet() + theme_linedraw() +
+  NoLegend() + geom_boxplot(
+    fill = "white",
+    width = 0.05,
+    outlier.size = 0.1,
+    outlier.alpha = 0.5
+  ) +
+  theme(text = element_text(size = 20)),
+ncol = 2, nrow = 1
+)
+
+```
+
+Let's find marker genes.
+
+
+```{r Spz versus BS DE genes, fig.width=5}
+
+PvSPZ.BS.combined <- SetIdent(PvSPZ.BS.combined, value = "Stage")
+
+Fig6a <- DimPlot(PvSPZ.BS.combined, cols = c("blue", "red")) + 
+  tenx_theme()+
+  theme(panel.grid.major = element_line(colour = "grey"),
+        legend.position = c(0.2, 0.86))
+
+```
+
+```{r}
+PvSPZ.BS.combined <- SetIdent(PvSPZ.BS.combined, value = "Replicate")
+
+replicates_BS <- DimPlot(PvSPZ.BS.combined) + 
+  tenx_theme()+
+  theme(panel.grid.major = element_line(colour = "grey"),
+        legend.position = "right")+
+  scale_color_d3()+
+  labs(tag = "", title = "Replicates")
+
+
+#supplementary plot of umap coloured by replicate
+ggsave("plots/Blood-stage_reps.tiff", width = 7, height = 7, units = "in", dpi = 320)
+
+```
+
+
+```{r Dot plots fig 6 Spz versus BS DE genes}
+PvSPZ.BS.combined <- SetIdent(PvSPZ.BS.combined, value = "Stage")
+
+markers_genes.2 <- FindMarkers(PvSPZ.BS.combined, logfc.threshold = 0.0, ident.1 = 'Sporozoite', ident.2 = 'BloodStage', test.use = "wilcox", min.pct = 0.5, only.pos = F, assay = "originalexp")
+
+markers_genes.2$gene<-rownames(markers_genes.2)
+markers_genes.2<-merge(markers_genes.2, Pv_genes, by.x = "gene", by.y = "GeneSeurat", all = F)
+
+markers_genes.2$absDiff<-abs(markers_genes.2$pct.1-markers_genes.2$pct.2)
+markers_genes.2$Sum<-markers_genes.2$pct.1+markers_genes.2$pct.2
+
+
+markers_genes.2.sig <- markers_genes.2 %>% 
+  filter(p_val_adj<0.01) 
+  # write_csv("tables/S10.csv")
+
+#for plot
+markers_genes.top.diff<-subset(markers_genes.2, absDiff > 0.65)
+markers_genes.top.diff<-markers_genes.top.diff %>% arrange(avg_log2FC)
+
+
+
+markers_genes.top.diff.2<-subset(markers_genes.2, absDiff < .25 & Sum > .75)
+markers_genes.top.diff.2<-subset(markers_genes.top.diff.2, p_val_adj <0.01)
+markers_genes.top.diff.2<-markers_genes.top.diff.2 %>% arrange(Sum)
+
+
+p<-FeaturePlot(PvSPZ.BS.combined, features = markers_genes.top.diff.3.b$gene, combine = F, label = F, order = T)
+
+for(i in 1:length(p)) {
+  p[[i]] <- p[[i]]+ NoLegend()+theme_linedraw()+NoAxes()+scale_color_viridis_c(alpha = 1, guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))
+}
+
+cowplot::plot_grid(plotlist = p, nrow = 4, ncol = 2)
+```
+
+```{r}
+markers_genes.2.sig %>% 
+  mutate(diff = abs(pct.1-pct.2)) %>% 
+  arrange(diff) %>% 
+  ggplot(aes(x = avg_log2FC, y = diff))+
+  geom_point()
+
+
+percent_similar <- markers_genes.2.sig %>% 
+  mutate(diff = abs(pct.1-pct.2)) %>% 
+  filter(absDiff < .25 & Sum > .75) %>% 
+  arrange(desc(avg_log2FC))
+```
+
+
+```{r Find marker genes and filter}
+markers_genes_all <- FindAllMarkers(PvSPZ.BS.combined, logfc.threshold = 0.0, test.use = "wilcox", min.pct = 0.5, only.pos = T, assay = "originalexp")
+
+markers_genes_all %>% 
+  filter(p_val_adj<0.01) %>% 
+  mutate(ID = gsub("-", "_", gene)) %>% 
+  mutate(absDiff = abs(pct.1-pct.2)) %>% 
+  mutate(sum = pct.1+pct.2) %>% 
+  left_join(Pv_genes) %>% 
+  select(ID,  description,cluster, avg_log2FC, pct.1, pct.2, p_val_adj, p_val, absDiff, sum) %>% 
+  write.csv("tables/S13.csv")
+```
+
+
+```{r fig.width=15}
+markers_genes_all_filt <- markers_genes_all %>% 
+  filter(p_val_adj<0.01) %>% 
+  mutate(ID = gsub("-", "_", gene)) %>% 
+  mutate(absDiff = abs(pct.1-pct.2)) %>% 
+  mutate(sum = pct.1+pct.2) %>% 
+  left_join(Pv_genes) %>% 
+  select(ID,  description,cluster, avg_log2FC, pct.1, pct.2, p_val_adj, p_val, absDiff, sum, GeneDescription, gene) 
+
+table(markers_genes_all_filt$cluster)
+
+markers_genes_all_filt %>% 
+  filter(absDiff>0.65)
+#for plot
+markers_genes.top.diff<-subset(markers_genes_all_filt, absDiff > 0.65)
+markers_genes.top.diff<-markers_genes.top.diff %>% arrange(cluster)
+
+
+
+markers_genes.top.diff.2<-subset(markers_genes.2, absDiff < .25 & Sum > .75)
+markers_genes.top.diff.2<-subset(markers_genes.top.diff.2, p_val_adj <0.01)
+markers_genes.top.diff.2<-markers_genes.top.diff.2 %>% arrange(Sum)
+
+
+#Figure 6B
+dotPlot1_BS <- DotPlot(PvSPZ.BS.combined, 
+        features = markers_genes.top.diff$gene, 
+        cluster.idents = T, 
+        assay = "originalexp", 
+        scale = F)+
+  coord_flip()+
+   geom_point(
+    aes(size = pct.exp),
+    shape = 21,
+    colour = "black",
+    stroke = 0.5) +
+  guides(size = guide_legend(override.aes = list(
+    shape = 21,
+    colour = "black",
+    fill = "white" )),
+    x = guide_axis(angle = 45)) +
+  coord_flip() + border() +
+  scale_colour_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+  scale_x_discrete(labels = unique(markers_genes.top.diff$GeneDescription),position = "top")+
+  labs(y = "", x = "", size = "% expressed")+
+  tenx_theme()+
+  theme(legend.position = "right",
+        plot.margin = unit(c(1,0,0,0), "cm"))
+```
+
+
+```{r Figure6C, fig.width = 10, fig.height=9}
+## dot plot - genes equal detection but differentially expressed
+
+#Figure 6c
+PercentSimilar <- DotPlot(PvSPZ.BS.combined, features = percent_similar$gene, cluster.idents = T, assay = "originalexp", scale = F)+
+  coord_flip()+
+  geom_point(
+    aes(size = pct.exp),
+    shape = 21,
+    colour = "black",
+    stroke = 0.5) +
+  scale_x_discrete(labels = percent_similar$GeneDescription, position = "top")+
+  scale_colour_gradient2(low = "red", mid = "grey", high = "green")+
+  theme(legend.position="left", legend.direction = 'vertical',
+        axis.title = element_blank(),
+        legend.title = element_blank(),
+        axis.text = element_text(size = 13),
+        legend.text=element_text(size=16, color = 'white'),
+        axis.text.x = element_text(color = 'white', size = 50))+
+  guides(size = guide_legend(override.aes = list(
+    shape = 21,
+    colour = "black",
+    fill = "white" )),
+    x = guide_axis(angle = 45)) +
+  scale_colour_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+  scale_x_discrete(labels = unique(percent_similar$GeneDescription),position = "top")+
+  labs(y = "", x = "", size = "% expressed")+
+  tenx_theme()+
+  theme(legend.position = "right",
+        plot.margin = unit(c(1,0,0,0), "cm"))
+
+
+```
+
+
+
+```{r Figure layout fig.width=20, fig.height=15}
+layout6a = "
+AAAAAABB
+AAAAAABB
+AAAAAABB
+CCCCCCDD
+CCCCCCDD
+CCCCCCDD
+"
+
+layout6 <- "
+AAAABB
+AAAABB
+AAAABB
+####CC
+####CC
+"
+
+Fig6a+ coord_fixed() + dotPlot1_BS+PercentSimilar+ plot_annotation(tag_levels = "A") +plot_layout(design = layout6)& theme(plot.tag = element_text(size = 40, face = "bold")) 
+ggsave("plots/Fig6a_D.tiff", width = 20, height = 18, units = "in", dpi = 320)
+
+```
+
+end of document.
