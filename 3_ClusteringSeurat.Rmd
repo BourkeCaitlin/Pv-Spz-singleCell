@@ -31,8 +31,9 @@ source("scripts/geneInfo.R")
 ```
 
 ```{r data upload}
-alldata <- readRDS("outputs/3_ClusteringSeurat.Rds")
+alldata <- readRDS("outputs/2b_seu_all_Pv.rds")
 DefaultAssay(object = alldata) <- "CCA"
+
 ```
 
 ```{r}
