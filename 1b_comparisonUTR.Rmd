@@ -34,7 +34,7 @@ source("scripts/geneInfo.R")
 
 
 ```{r import filtered from script1}
-withUTR <- readRDS("outputs/1_all_Pv_filtered.rds")
+withUTR <- readRDS("outputs/1a_all_Pv_filtered.rds")
 withUTR[[1]]@colData
 ```
 
@@ -231,6 +231,7 @@ all_v2 %>%
 ```
 
 ```{r write supplementary file S3}
+dir.create("tables")
 all %>% 
   mutate(mod = paste0(rep, cond)) %>% 
   select(gene, value, mod) %>% 
@@ -287,7 +288,7 @@ fig_UTR_increase <- all %>%
   filter(summ_stat=="sum") %>% 
   filter(gene%in%genes_to_plot) %>% 
   mutate(gene = case_when(
-    gene=="PVP01_1258000" ~ "PVP01_1258000::<i>GEST</i>",
+    gene=="PVP01_1258000" ~ "PVP01_1258000::GEST",
     gene=="PVP01_0117400" ~ "PVP01_0117400::CNA",
     gene=="PVP01_0715100"~ "PVP01_0715100::HoMu",
     gene=="PVP01_1011800"~ "PVP01_1011800::unknown"
@@ -433,7 +434,7 @@ venn::venn(
 grid.echo()
 venn_plot <- grid.grab()
 venn_plot <- as.ggplot(venn_plot)
-
+dir.create("plots")
 ggsave("plots/fig1e_venn.png", width = 5, height = 3)
 ```
 ```{r create corr plot between replicates fig1f}

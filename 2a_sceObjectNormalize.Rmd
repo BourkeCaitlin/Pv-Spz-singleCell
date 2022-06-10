@@ -16,7 +16,7 @@ suppressPackageStartupMessages({
 Load filtered SCE objects.
 
 ```{r load data}
-all_Pv <- readRDS("outputs/1_all_Pv_filtered.rds")
+all_Pv <- readRDS("outputs/1a_all_Pv_filtered.rds")
 ```
 
 Normalize by convolution.

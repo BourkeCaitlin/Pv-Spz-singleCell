@@ -48,8 +48,8 @@ all_Pv <-subset(x = all_Pv, downsample = 500)
 Import *P.falciparum* scRNA-seq data.
 ```{r import pf data}
 
-RealHowick <- read.csv("data/counts_pfmca_20200525.csv") # Pf SmartSeq - 2021  Real et al. Nat Comm
-RealHowick_meta <- read.csv("data/allcellinfo_pfmca_20200930.csv") # Pf SmartSeq - 2021  Real et al. Nat Comm
+RealHowick <- read.csv("data/RealHowick/counts_pfmca_20200525.csv") # Pf SmartSeq - 2021  Real et al. Nat Comm
+RealHowick_meta <- read.csv("data/RealHowick/allcellinfo_pfmca_20200930.csv") # Pf SmartSeq - 2021  Real et al. Nat Comm
 
 pfcounts <- as.data.frame(RealHowick)
 rownames(pfcounts) <- pfcounts$X
@@ -1049,6 +1049,9 @@ DotPlot(ortho_int_C3C4, features =  MarkersC3C4.RBP$Orthogroup, cluster.idents =
   theme(legend.position = "bottom")
 
 
+```
+```{r}
+saveRDS(ortho_int, "outputs/5b_ortho_int")
 ```
 
 
