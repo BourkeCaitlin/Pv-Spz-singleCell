@@ -243,14 +243,6 @@ markers_genes.top.diff.2<-subset(markers_genes.2, absDiff < .25 & Sum > .75)
 markers_genes.top.diff.2<-subset(markers_genes.top.diff.2, p_val_adj <0.01)
 markers_genes.top.diff.2<-markers_genes.top.diff.2 %>% arrange(Sum)
 
-
-p<-FeaturePlot(PvSPZ.BS.combined, features = markers_genes.top.diff.3.b$gene, combine = F, label = F, order = T)
-
-for(i in 1:length(p)) {
-  p[[i]] <- p[[i]]+ NoLegend()+theme_linedraw()+NoAxes()+scale_color_viridis_c(alpha = 1, guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))
-}
-
-cowplot::plot_grid(plotlist = p, nrow = 4, ncol = 2)
 ```
 
 ```{r}
