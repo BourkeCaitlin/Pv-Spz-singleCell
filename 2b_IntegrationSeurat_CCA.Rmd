@@ -1,0 +1,350 @@
+---
+title: "<i>P. vivax </i> single cell RNA seq: integrating and visualising in low dim space"
+subtitle: "File: 2b_IntegrationSeurat_CCA.Rmd"
+author: "Anthony Ruberto and Caitlin Bourke"
+output: html_document
+---
+
+```{r load packages}
+suppressPackageStartupMessages({
+library(Seurat)
+library(ggpubr)
+library(tidyverse)
+library(rtracklayer)
+library(viridis)
+library(patchwork)
+})
+source("scripts/functions_aesthetics.R")
+source("scripts/geneInfo.R")
+```
+
+Load the data from the previous notebook. At this point we will also create a Seurat object and use this format downstream processining.
+
+Begin the data integration process. We will first combined the five datasets into a list.
+
+```{r make list}
+all_Pv <- readRDS("outputs/2a_all_Pv.rds")
+combined <- list(all_Pv[[1]], all_Pv[[2]], all_Pv[[3]]) 
+seu_all_Pv <- NULL
+for (i in 1:length(combined)) {
+  seu_all_Pv[[i]] <- as.Seurat(combined[[i]], counts = "counts", data = "logcounts" )
+  seu_all_Pv[[i]]$nCount_RNA<-seu_all_Pv[[i]]$sum
+  seu_all_Pv[[i]]$nFeature_RNA<-seu_all_Pv[[i]]$detected
+}
+```
+Let's normalize the data and find the variable features in each of the datasets.
+
+```{r normalize and feature selection}
+for (i in 1:length(seu_all_Pv)) {
+    seu_all_Pv[[i]] <- NormalizeData(seu_all_Pv[[i]], verbose = FALSE)
+    seu_all_Pv[[i]] <- FindVariableFeatures(seu_all_Pv[[i]], selection.method = "vst", nfeatures = nrow(seu_all_Pv[[i]])*.3,verbose = FALSE)
+}
+seu_all_Pv_anchors <- FindIntegrationAnchors(object.list = seu_all_Pv, dims = 1:30)
+```
+Once we have found the anchors. We can integrate the data.
+
+```{r integrate}
+set.seed(418462)
+seu_all_Pv <- IntegrateData(anchorset = seu_all_Pv_anchors, dims = 1:30, new.assay.name = "CCA")
+names(seu_all_Pv@assays)
+```
+We can now scale the data before performing some data reduction transformations.
+```{r scale and reduce integrated data}
+#Run Dimensionality reduction on integrated space
+seu_all_Pv <- ScaleData(seu_all_Pv, verbose = FALSE, assay = "CCA")
+seu_all_Pv <- RunPCA(seu_all_Pv, npcs = 30, verbose = FALSE, assay = "CCA",reduction.name = "PCA_on_CCA")
+seu_all_Pv <- RunUMAP(seu_all_Pv, reduction = "PCA_on_CCA", dims = 1:30, reduction.name = "UMAP_on_CCA", n.components = 2L, seed.use = 365415,  n.neighbors = 20, min.dist = 0.5,  umap.method = "umap-learn")
+```
+
+Let's see how the data integrates..
+```{r}
+DimPlot(seu_all_Pv, reduction = "UMAP_on_CCA", group.by = "Replicate", split.by = "Replicate")+ theme_linedraw()
+```
+
+```{r}
+DimPlot(seu_all_Pv, reduction = "UMAP_on_CCA", group.by  = "Replicate") + theme_linedraw()
+```
+
+```{r}
+FeaturePlot(seu_all_Pv, features = "nCount_RNA", reduction = "UMAP_on_CCA")
+```
+
+```{r plot integrated, fig.width=5, fig.height=5 }
+
+DimPlot(seu_all_Pv, reduction = "PCA_on_CCA", split.by = "Replicate")
+labels = c(Pv1 = "Rep 1",Pv2 =  "Rep 2", Pv3 = "Rep 3")
+replicate_split <- seu_all_Pv@reductions$UMAP_on_CCA@cell.embeddings %>%
+    as_tibble() %>% 
+    ggplot(aes(UMAP_1, UMAP_2)) +
+    geom_point(color = "black",alpha = 0.5 ,size = 0.4) +
+    facet_grid(. ~ seu_all_Pv$Replicate, scales = "fixed", labeller = as_labeller(labels)) +
+    geom_density2d(size = 0.5,colour = "red",alpha = 0.75) + 
+    labs(y = "", x = "", tag = "B")+
+    tenx_theme()+
+    theme(strip.background = element_blank(),
+          strip.text = element_text(colour = "black", size = 25, hjust = 0),
+          strip.text.y = element_blank(), 
+          axis.text   = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid.major = element_line(colour = "grey"))
+  
+replicate_all <-  seu_all_Pv@reductions$UMAP@cell.embeddings %>% 
+    as_tibble() %>% 
+    ggplot(aes(UMAP_1, UMAP_2)) +
+    geom_point(color = "black", alpha = 0.5 , size = 0.5) +
+    geom_density2d(size = 1,colour = "red", alpha = 0.5) +
+    tenx_theme()+
+    theme(
+          legend.position = "none",
+          plot.title = element_text(size = 25),
+          panel.grid.major = element_line(colour = "grey"))+
+  labs(x = "UMAP 1", y = "UMAP 2", title = "Merged")
+replicate_split/replicate_all+ plot_layout(heights = c(3,7))
+```
+
+
+
+```{r figure 2c, fig.height=6, fig.width=8}
+qc_umap <- ggarrange(
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "nCount_RNA",
+    order = T) + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+    labs(x = "UMAP 1", y = "UMAP 2", title = "UMI counts", tag = "\n\nC")+
+    tenx_theme_genePlots()+
+    theme(plot.title = element_text(face = "plain"),
+          plot.tag = element_text(size = 80, face = "bold"),
+          plot.margin = unit(c(0,0,0,0), "cm"))
+  
+  ,
+  
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "nFeature_RNA",
+    order = T) + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+    labs(x = "UMAP 1", y = "UMAP 2", title = "Genes detected")+
+    tenx_theme_genePlots()  +
+    theme(plot.title = element_text(face = "plain"),
+          plot.margin = unit(c(0,0,0,0), "cm"))
+  ,
+  align = "hv", ncol = 3, nrow = 1)
+# for plotting feature expression use data slot from original exp
+DefaultAssay(object = seu_all_Pv) <- "originalexp"
+#membrane proteins 
+membrane_umap <- 
+ggarrange(
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "PVP01-0835600",
+    order = T,
+    slot = "data") + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+    labs(title = "csp", subtitle = "PVP01_0835600", x = "UMAP 1", y = "UMAP 2", tag = "D \n")+
+    tenx_theme_genePlots()+
+    theme(plot.tag = element_text(size = 80, face = "bold",),
+          plot.margin = unit(c(0,0,0,0), "cm"))
+  ,
+  
+  
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "PVP01-1403100",
+    order = T) + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+    labs(title = "uis3", subtitle = "PVP01_1403100", x = "UMAP 1", y = "UMAP 2")+
+    tenx_theme_genePlots()+
+    theme(plot.margin = unit(c(0,0,0,0), "cm"))
+  ,
+  
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "PVP01-0602100",
+    order = T) + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) + 
+    labs(title = "uis4", subtitle = "PVP01_0602100", x = "UMAP 1", y = "UMAP 2")+
+    tenx_theme_genePlots()+
+    theme(plot.margin = unit(c(0,0,0,0), "cm"))
+  
+  ,
+  align = "hv",
+  ncol = 3,
+  nrow = 1
+)
+
+
+# cell traversal
+cell_traversal_umap <- ggarrange(
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "PVP01-1435400",
+    order = T) + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) + 
+    labs(title = "celtos", subtitle = "PVP01_1435400", x = "UMAP 1", y = "UMAP 2", tag = "E \n")+
+    tenx_theme()+
+    tenx_theme_genePlots()+
+    theme(plot.tag = element_text(size = 80, face = "bold", colour = "white"),
+          plot.margin = unit(c(0,0,0,0), "cm"))
+  ,
+  
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "PVP01-1258000",
+    order = T) + scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) + 
+    labs(title = "gest", subtitle = "PVP01_1258000", x = "UMAP 1", y = "UMAP 2")+
+    tenx_theme_genePlots() +
+    theme(plot.margin = unit(c(0,0,0,0), "cm"))
+  ,
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "PVP01-1212300",
+    order = T) + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+    labs(title = "spect1",subtitle = "PVP01_1212300", x = "UMAP 1", y = "UMAP 2")+
+    tenx_theme_genePlots()+
+    theme(plot.margin = unit(c(0,0,0,0), "cm"))
+  
+  ,
+  align = "hv",
+  ncol = 3,
+  nrow = 1
+)
+# mRNA repression
+reg_umap <- 
+ggarrange(
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "PVP01-0526500",
+    order = T) + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) + 
+    labs(title = "puf2", subtitle = "PVP01_0526500", x = "UMAP 1", y = "UMAP 2", tag = "F \n")+
+   tenx_theme_genePlots()+
+    theme(plot.tag = element_text(size = 80, face = "bold", colour = "white"),
+          plot.margin = unit(c(0,0,0,0), "cm"))
+,
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "PVP01-1426100",
+    order = T) + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+    labs(title = "alba1", subtitle = "PVP01_1426100", x = "UMAP 1", y = "UMAP 2")+
+    tenx_theme_genePlots()+
+    theme(plot.margin = unit(c(0,0,0,0), "cm"))
+,
+  FeaturePlot(
+    seu_all_Pv,
+    reduction = "UMAP_on_CCA",
+    features = "PVP01-1207300",
+    order = T) + 
+    scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black")) +
+    labs(title = "alba4", subtitle = "PVP01_1207300", x = "UMAP 1", y = "UMAP 2")+
+    tenx_theme_genePlots()+
+  theme(plot.margin = unit(c(0,0,0,0), "cm"))
+  ,
+  align = "hv",
+  ncol = 3,
+  nrow = 1
+)
+
+membrane_umap <- annotate_figure(membrane_umap, top = text_grob("Membrane associated",  size = 70, vjust = 3, hjust = 0.85))
+cell_traversal_umap <- annotate_figure(cell_traversal_umap, top = text_grob("Cell traversal",  size = 70, vjust = 3, hjust = 1.45))
+reg_umap <- annotate_figure(reg_umap, top = text_grob("Translational repression",  size = 70, vjust = 3, hjust = 0.8))
+
+
+```
+
+```{r violin plots}
+meta <- NULL
+for (i in 1:length(all_Pv)) {
+  meta[[i]] <- all_Pv[[i]]@colData %>% as_tibble
+}
+
+meta <- meta[[1]] %>% 
+  bind_rows(meta[[2]]) %>% 
+  bind_rows(meta[[3]]) 
+
+sum <- meta %>% 
+  ggplot(aes(x = Replicate, y = sum))+
+  geom_violin(trim = FALSE, fill = '#A4A4A4', color = "black") +
+  scale_y_log10() + 
+  geom_boxplot(width = 0.05, outlier.size = 0.1, outlier.alpha = 0.5) +
+  scale_x_discrete(labels = c(Pv1 = "Rep 1", Pv2 = "Rep 2", Pv3 = "Rep 3", Pv5 = "Rep 4"))+
+  labs(x = "", y = "# of UMIs per cell", tag = "A")+
+  tenx_theme()+
+   theme(panel.grid.major.y = element_line(colour = "grey"),
+         plot.margin = unit(c(1,1,1,1), "cm"))
+        
+detected <- meta %>% 
+  ggplot(aes(x = Replicate, y = detected))+
+  geom_violin(trim = FALSE, fill = '#A4A4A4', color = "black") +
+  scale_y_log10() + 
+  geom_boxplot(width = 0.05, outlier.size = 0.1, outlier.alpha = 0.5) +
+  scale_x_discrete(labels = c(Pv1 = "Rep 1", Pv2 = "Rep 2", Pv3 = "Rep 3", Pv5 = "Rep 4"))+
+  labs(x = "", y = " # of genes per cell")+
+  tenx_theme()+
+  theme(panel.grid.major.y = element_line(colour = "grey"),
+        plot.margin = unit(c(1,1,1,1), "cm"))
+  
+  
+  sum+detected
+```
+
+
+
+```{r figure 2a, fig.height=6, fig.width=8}
+layout2a = "
+AAABBB
+CCCEEE
+DDDEEE
+DDDEEE
+###EEE
+"
+
+
+sum+ detected + replicate_split+ replicate_all+ grid::textGrob('tbc')+ plot_layout(design = layout2a)& theme(plot.tag = element_text(size = 40, face = "bold"))
+ggsave("plots/figure2a.png", width = 20, height = 20, units = "in")
+```
+
+```{r 2b}
+layout2b = "
+AAA
+BBB
+BBB
+###
+"
+replicate_split+ replicate_all+ plot_layout(design = layout2b) & theme(plot.tag = element_text(size = 40, face = "bold"))
+ggsave("plots/figure2b.png", width = 10, height = 10, units = "in")
+```
+
+
+```{r fig.width=10, fig.height=10}
+layout2c="
+AAA
+BBB
+CCC
+DDD"
+
+
+
+qc_umap+membrane_umap+cell_traversal_umap+reg_umap+plot_layout(design = layout2c)
+
+ggsave("plots/figure2c.tiff", width = 20, height = 30, units = "in")
+```
+
+
+```{r}
+saveRDS(seu_all_Pv, "outputs/2b_seu_all_Pv.rds")
+
+seu_all_Pv <- readRDS("outputs/2b_seu_all_Pv.rds")
+```
