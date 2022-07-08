@@ -28,6 +28,7 @@ library(rnaturalearthhires)
 library(readxl)
 library(data.table)
 library(viridis)
+library(ggsci)
 source("scripts/functions_aesthetics.R")
 source("scripts/geneInfo.R")
 ```
