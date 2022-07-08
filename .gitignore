@@ -44,7 +44,6 @@ vignettes/*.pdf
 *.Rds
 *.svg
 *.png
-*.tsv
 *.csv
 *.mtx
 *.txt
