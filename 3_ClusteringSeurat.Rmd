@@ -90,11 +90,6 @@ plot_grid(nrow = 5, ncol=2,
 
 
 DimPlot(alldata, reduction = "UMAP_on_CCA", group.by = "CCA_snn_res.0.1", split.by =  "Replicate")+ggtitle("leiden_0.1")+scale_color_lancet()+border()
-
-
-# add plots recent AR
-
-alldata@meta.data
 ```
 
 ```{r set ident, fig.width = 20, fig.height=6}
@@ -388,5 +383,3 @@ saveRDS(alldata,"outputs/3_ClusteringSeurat.Rds")
 alldata <- readRDS("outputs/3_ClusteringSeurat.Rds")
 
 ```
-
-Proceed to next notebook.
