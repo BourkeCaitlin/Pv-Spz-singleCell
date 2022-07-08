@@ -165,7 +165,6 @@ SupFig4b <- ggplot(pseudotime_association, aes(x =meanLogFC , y = waldStat+1))+
 Next, we will look at genes that are significantly different from timepoint = 0.
 
 ```{r differentially expressed genes over pseudotime II: startVsEndTest}
-#startvsEndTest: DE end to start ("progenitor markers")
 startRes <- startVsEndTest(sce, l2fc=0)
 startRes$FDR<-p.adjust(startRes$pvalue, "fdr")
 startRes<-startRes[order(startRes$waldStat, decreasing = T),]
@@ -315,23 +314,6 @@ gbm$Label<-Pv$CCA_snn_res.0.1
 gbm$Day<-Pv$Day
 gbm$label<-Pv$label
 gbm<-gbm[order(gbm$Pseudo),]
-```
-
-```{r plot pseudotime}
-#example
-ggplot(gbm, aes(x =Pseudo, y =  PVP01_1011800 , color = Pseudo))+
-  geom_point(alpha = 0.5)+
-  scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
-  geom_smooth( span = 0.2)
-ggplot(gbm, aes(x =Pseudo, y =  PVP01_1011800 , color = Pseudo))+
-  geom_point(alpha = 0.5)+
-  scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
-  geom_smooth( span = 0.2)
-#total
-ggplot(pseudotime_association, aes(x =meanLogFC, y =  waldStat , color = fdr))+
-  geom_point(alpha = 0.5)+
-  scale_color_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
-  scale_y_log10()+theme_linedraw()+border()
 ```
 
 ***
