@@ -345,6 +345,4 @@ ggsave("plots/figure2c.tiff", width = 20, height = 30, units = "in")
 
 ```{r}
 saveRDS(seu_all_Pv, "outputs/2b_seu_all_Pv.rds")
-
-seu_all_Pv <- readRDS("outputs/2b_seu_all_Pv.rds")
 ```
