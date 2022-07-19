@@ -23,7 +23,7 @@ source("scripts/geneInfo.R")
 Load the data from the previous notebook. At this point we will also create a Seurat object and use this format downstream processining.
 ```{r load data Pv Spz}
 PvSPZ<-readRDS("outputs/3_ClusteringSeurat.Rds")
-PvBS<-readRDS("data/Sa_bloodStage/7_PvBSInt_NoT_CCA.rds")
+PvBS<-readRDS("outputs/6b_PvBSInt_NoT_CCA.rds")
 
 PvBS@assays$originalexp <- PvBS@assays$RNA #this is needed at the FInd Markers step 
 ```
@@ -212,7 +212,7 @@ replicates_BS <- DimPlot(PvSPZ.BS.combined) +
 
 
 #supplementary plot of umap coloured by replicate
-ggsave("plots/Blood-stage_reps.tiff", width = 7, height = 7, units = "in", dpi = 320)
+ggsave("plots/Blood-stage_reps.svg", width = 7, height = 7, units = "in", dpi = 320)
 
 ```
 
@@ -380,7 +380,7 @@ AAAABB
 "
 
 Fig6a+ coord_fixed() + dotPlot1_BS+PercentSimilar+ plot_annotation(tag_levels = "A") +plot_layout(design = layout6)& theme(plot.tag = element_text(size = 40, face = "bold")) 
-ggsave("plots/Fig6a_D.tiff", width = 20, height = 18, units = "in", dpi = 320)
+ggsave("plots/Fig6a_D.svg", width = 20, height = 18, units = "in", dpi = 320)
 
 ```
 
