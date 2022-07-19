@@ -1,0 +1,1055 @@
+---
+title: "Processing Pv Blood Stage data"
+subtitle: "File: 6b_Sa_BloodStage_processing.Rmd"
+author: "Anthony Ruberto and Caitlin Bourke"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Load dependencies.
+
+```{r setup}
+suppressPackageStartupMessages({
+library(Seurat)
+library(DropletUtils)
+library(scater)
+library(scran)
+library(BiocSingular)
+library(SingleCellExperiment)
+library(dplyr)
+library(scDblFinder)
+library(rtracklayer)
+library(here)
+})
+
+```
+
+Let's load in the data.
+
+```{r load in data }
+
+data_dir1 <- "path/to/Sa_bloodStage/withUTRs/raw69"
+data_dir2 <- "path/to/Sa_bloodStage/withUTRs/raw70"
+data_dir3 <- "path/to/Sa_bloodStage/withUTRs/raw71"
+data_dir4 <- "path/to/Sa_bloodStage/withUTRs/raw72"
+data_dir5 <- "path/to/Sa_bloodStage/withUTRs/raw73"
+data_dir6 <- "path/to/Sa_bloodStage/withUTRs/raw74"
+data_dir7 <- "path/to/Sa_bloodStage/withUTRs/raw75"
+data_dir8 <- "path/to/Sa_bloodStage/withUTRs/raw76"
+data_dir9 <- "path/to/Sa_bloodStage/withUTRs/raw77"
+data_dir10 <- "path/to/Sa_bloodStage/withUTRs/raw78"
+
+PvBS1<-read10xCounts(data_dir1, col.names = T)
+PvBS2<-read10xCounts(data_dir2, col.names = T)
+PvBS3<-read10xCounts(data_dir3, col.names = T)
+PvBS4<-read10xCounts(data_dir4, col.names = T)
+PvBS5<-read10xCounts(data_dir5, col.names = T)
+PvBS6<-read10xCounts(data_dir6, col.names = T)
+PvBS7<-read10xCounts(data_dir7, col.names = T)
+PvBS8<-read10xCounts(data_dir8, col.names = T)
+PvBS9<-read10xCounts(data_dir9, col.names = T)
+PvBS10<-read10xCounts(data_dir10, col.names = T)
+
+rownames(PvBS1) <- uniquifyFeatureNames(rowData(PvBS1)$ID, rowData(PvBS1)$Symbol)
+rownames(PvBS2) <- uniquifyFeatureNames(rowData(PvBS2)$ID, rowData(PvBS2)$Symbol)
+rownames(PvBS3) <- uniquifyFeatureNames(rowData(PvBS3)$ID, rowData(PvBS3)$Symbol)
+rownames(PvBS4) <- uniquifyFeatureNames(rowData(PvBS4)$ID, rowData(PvBS4)$Symbol)
+rownames(PvBS5) <- uniquifyFeatureNames(rowData(PvBS5)$ID, rowData(PvBS5)$Symbol)
+rownames(PvBS6) <- uniquifyFeatureNames(rowData(PvBS6)$ID, rowData(PvBS6)$Symbol)
+rownames(PvBS7) <- uniquifyFeatureNames(rowData(PvBS7)$ID, rowData(PvBS7)$Symbol)
+rownames(PvBS8) <- uniquifyFeatureNames(rowData(PvBS8)$ID, rowData(PvBS8)$Symbol)
+rownames(PvBS9) <- uniquifyFeatureNames(rowData(PvBS9)$ID, rowData(PvBS9)$Symbol)
+rownames(PvBS10) <- uniquifyFeatureNames(rowData(PvBS10)$ID, rowData(PvBS10)$Symbol)
+
+head(rownames(PvBS1))
+head(rownames(PvBS2))
+head(rownames(PvBS3))
+head(rownames(PvBS4))
+head(rownames(PvBS5))
+head(rownames(PvBS6))
+head(rownames(PvBS7))
+head(rownames(PvBS8))
+head(rownames(PvBS9))
+head(rownames(PvBS10))
+
+```
+
+Remove rRNA genes from the counts matrices.
+```{r removing rRNA from the counts matrix}
+
+rRNA_pv <- import.gff3("path/to/PlasmoDB-51_PvivaxP01.gff") %>% 
+  as_tibble() %>% 
+  filter(type=="rRNA") %>% 
+  select(ID, description) %>% 
+  mutate(ID = gsub("\\.1", "", ID))
+
+PvBS1<-PvBS1[!rownames(PvBS1)%in%rRNA_pv$ID,]
+PvBS2<-PvBS2[!rownames(PvBS2)%in%rRNA_pv$ID,]
+PvBS3<-PvBS3[!rownames(PvBS3)%in%rRNA_pv$ID,]
+PvBS4<-PvBS4[!rownames(PvBS4)%in%rRNA_pv$ID,]
+PvBS5<-PvBS5[!rownames(PvBS5)%in%rRNA_pv$ID,]
+PvBS6<-PvBS6[!rownames(PvBS6)%in%rRNA_pv$ID,]
+PvBS7<-PvBS7[!rownames(PvBS7)%in%rRNA_pv$ID,]
+PvBS8<-PvBS8[!rownames(PvBS8)%in%rRNA_pv$ID,]
+PvBS9<-PvBS9[!rownames(PvBS9)%in%rRNA_pv$ID,]
+PvBS10<-PvBS10[!rownames(PvBS10)%in%rRNA_pv$ID,]
+
+```
+
+Get those problematic empty droplets out of your hair!
+
+```{r empty drops}
+
+set.seed(123456)
+
+e.out.PvBS1 <- emptyDrops(counts(PvBS1))
+sum(e.out.PvBS1$FDR <= 0.001, na.rm=TRUE)
+PvBS1.sce <- PvBS1[,which(e.out.PvBS1$FDR <= 0.001)]
+
+e.out.PvBS2 <- emptyDrops(counts(PvBS2))
+sum(e.out.PvBS2$FDR <= 0.001, na.rm=TRUE)
+PvBS2.sce <- PvBS2[,which(e.out.PvBS2$FDR <= 0.001)]
+
+e.out.PvBS3 <- emptyDrops(counts(PvBS3))
+sum(e.out.PvBS3$FDR <= 0.001, na.rm=TRUE)
+PvBS3.sce <- PvBS3[,which(e.out.PvBS3$FDR <= 0.001)]
+
+e.out.PvBS4 <- emptyDrops(counts(PvBS4))
+sum(e.out.PvBS4$FDR <= 0.001, na.rm=TRUE)
+PvBS4.sce <- PvBS4[,which(e.out.PvBS4$FDR <= 0.001)]
+
+e.out.PvBS5 <- emptyDrops(counts(PvBS5))
+sum(e.out.PvBS5$FDR <= 0.001, na.rm=TRUE)
+PvBS5.sce <- PvBS5[,which(e.out.PvBS5$FDR <= 0.001)]
+
+e.out.PvBS6 <- emptyDrops(counts(PvBS6))
+sum(e.out.PvBS6$FDR <= 0.001, na.rm=TRUE)
+PvBS6.sce <- PvBS6[,which(e.out.PvBS6$FDR <= 0.001)]
+
+e.out.PvBS7 <- emptyDrops(counts(PvBS7))
+sum(e.out.PvBS7$FDR <= 0.001, na.rm=TRUE)
+PvBS7.sce <- PvBS7[,which(e.out.PvBS7$FDR <= 0.001)]
+
+e.out.PvBS8 <- emptyDrops(counts(PvBS8))
+sum(e.out.PvBS8$FDR <= 0.001, na.rm=TRUE)
+PvBS8.sce <- PvBS8[,which(e.out.PvBS8$FDR <= 0.001)]
+
+e.out.PvBS9 <- emptyDrops(counts(PvBS9))
+sum(e.out.PvBS9$FDR <= 0.001, na.rm=TRUE)
+PvBS9.sce <- PvBS9[,which(e.out.PvBS9$FDR <= 0.001)]
+
+e.out.PvBS10 <- emptyDrops(counts(PvBS10))
+sum(e.out.PvBS10$FDR <= 0.001, na.rm=TRUE)
+PvBS10.sce <- PvBS10[,which(e.out.PvBS10$FDR <= 0.001)]
+
+rm(PvBS1, PvBS2, PvBS3, PvBS4, PvBS5, PvBS6, PvBS7, PvBS8, PvBS9, PvBS10)
+rm(e.out.PvBS1, e.out.PvBS2, e.out.PvBS3, e.out.PvBS4, e.out.PvBS5, e.out.PvBS6, e.out.PvBS7, e.out.PvBS8, e.out.PvBS9, e.out.PvBS10)
+
+```
+Let's now pretty up our SCE objects.
+
+```{r prep matrices}
+
+Pv_genes<-import.gff3("path/to/PlasmoDB-51_PvivaxP01.gff") %>% 
+  as_tibble() %>% 
+  #filter(type =="protein_coding_gene") %>%
+  select(ID, description) %>% 
+  mutate(GeneSeurat = gsub("_", "-", ID)) %>% 
+  mutate(GeneDescription = paste0(ID, "::", description))
+Pv_genes$description<-gsub('\\+', ' ', Pv_genes$description)
+Pv_genes$GeneDescription<-gsub('\\+', ' ', Pv_genes$GeneDescription)
+Pv_genes<-Pv_genes[ends_with(".1",vars=Pv_genes$ID),]
+Pv_genes[]<- lapply(Pv_genes, gsub, pattern = ".1", replacement = "", fixed = TRUE)
+
+rowData(PvBS1.sce)$Description <- Pv_genes$description[match(rownames(PvBS1.sce), Pv_genes$ID)]
+rowData(PvBS1.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS1.sce), Pv_genes$ID)]
+colData(PvBS1.sce)$Sample<-"69"
+colData(PvBS1.sce)$Species<-"Saimiri_boliviensis"
+colData(PvBS1.sce)$Vivax_strain<-"NIH-1993"
+colData(PvBS1.sce)$Condition<-"No_Treatment"
+colData(PvBS1.sce)$Day<-"15_DPI"
+colData(PvBS1.sce)$Animal_ID<-"3879"
+colData(PvBS1.sce)$Barcode<-paste(colData(PvBS1.sce)$Barcode,"_",colData(PvBS1.sce)$Sample, sep = "")
+colnames(PvBS1.sce)<-colData(PvBS1.sce)$Barcode
+
+rowData(PvBS2.sce)$Description <- Pv_genes$description[match(rownames(PvBS2.sce), Pv_genes$ID)]
+rowData(PvBS2.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS2.sce), Pv_genes$ID)]
+colData(PvBS2.sce)$Sample<-"70"
+colData(PvBS2.sce)$Species<-"Aotus_nancymaae"
+colData(PvBS2.sce)$Vivax_strain<-"Indonesia-I"
+colData(PvBS2.sce)$Condition<-"CQ_(16h_5mg/kg)"
+colData(PvBS2.sce)$Day<-"16_DPI"
+colData(PvBS2.sce)$Animal_ID<-"86574"
+colData(PvBS2.sce)$Barcode<-paste(colData(PvBS2.sce)$Barcode,"_",colData(PvBS2.sce)$Sample, sep = "")
+colnames(PvBS2.sce)<-colData(PvBS2.sce)$Barcode
+
+rowData(PvBS3.sce)$Description <- Pv_genes$description[match(rownames(PvBS3.sce), Pv_genes$ID)]
+rowData(PvBS3.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS3.sce), Pv_genes$ID)]
+colData(PvBS3.sce)$Sample<-"71"
+colData(PvBS3.sce)$Species<-"Aotus_nancymaae"
+colData(PvBS3.sce)$Vivax_strain<-"Indonesia-I"
+colData(PvBS3.sce)$Condition<-"No_Treatment"
+colData(PvBS3.sce)$Day<-"12_DPI"
+colData(PvBS3.sce)$Animal_ID<-"86574"
+colData(PvBS3.sce)$Barcode<-paste(colData(PvBS3.sce)$Barcode,"_",colData(PvBS3.sce)$Sample, sep = "")
+colnames(PvBS3.sce)<-colData(PvBS3.sce)$Barcode
+
+rowData(PvBS4.sce)$Description <- Pv_genes$description[match(rownames(PvBS4.sce), Pv_genes$ID)]
+rowData(PvBS4.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS4.sce), Pv_genes$ID)]
+colData(PvBS4.sce)$Sample<-"72"
+colData(PvBS4.sce)$Species<-"Saimiri_boliviensis"
+colData(PvBS4.sce)$Vivax_strain<-"NIH-1993"
+colData(PvBS4.sce)$Condition<-"No_Treatment"
+colData(PvBS4.sce)$Day<-"21_DPI"
+colData(PvBS4.sce)$Animal_ID<-"5541"
+colData(PvBS4.sce)$Barcode<-paste(colData(PvBS4.sce)$Barcode,"_",colData(PvBS4.sce)$Sample, sep = "")
+colnames(PvBS4.sce)<-colData(PvBS4.sce)$Barcode
+
+rowData(PvBS5.sce)$Description <- Pv_genes$description[match(rownames(PvBS5.sce), Pv_genes$ID)]
+rowData(PvBS5.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS5.sce), Pv_genes$ID)]
+colData(PvBS5.sce)$Sample<-"73"
+colData(PvBS5.sce)$Species<-"Saimiri_boliviensis"
+colData(PvBS5.sce)$Vivax_strain<-"Chesson"
+colData(PvBS5.sce)$Condition<-"No_Treatment"
+colData(PvBS5.sce)$Day<-"24_DPI"
+colData(PvBS5.sce)$Animal_ID<-"4215"
+colData(PvBS5.sce)$Barcode<-paste(colData(PvBS5.sce)$Barcode,"_",colData(PvBS5.sce)$Sample, sep = "")
+colnames(PvBS5.sce)<-colData(PvBS5.sce)$Barcode
+
+rowData(PvBS6.sce)$Description <- Pv_genes$description[match(rownames(PvBS6.sce), Pv_genes$ID)]
+rowData(PvBS6.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS6.sce), Pv_genes$ID)]
+colData(PvBS6.sce)$Sample<-"74"
+colData(PvBS6.sce)$Species<-"Aotus_nancymaae"
+colData(PvBS6.sce)$Vivax_strain<-"Chesson"
+colData(PvBS6.sce)$Condition<-"CQ_(16h_10mg/kg)"
+colData(PvBS6.sce)$Day<-"16_DPI"
+colData(PvBS6.sce)$Animal_ID<-"86436"
+colData(PvBS6.sce)$Barcode<-paste(colData(PvBS6.sce)$Barcode,"_",colData(PvBS6.sce)$Sample, sep = "")
+colnames(PvBS6.sce)<-colData(PvBS6.sce)$Barcode
+
+rowData(PvBS7.sce)$Description <- Pv_genes$description[match(rownames(PvBS7.sce), Pv_genes$ID)]
+rowData(PvBS7.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS7.sce), Pv_genes$ID)]
+colData(PvBS7.sce)$Sample<-"75"
+colData(PvBS7.sce)$Species<-"Aotus_nancymaae"
+colData(PvBS7.sce)$Vivax_strain<-"Chesson"
+colData(PvBS7.sce)$Condition<-"No_Treatment"
+colData(PvBS7.sce)$Day<-"12_DPI"
+colData(PvBS7.sce)$Animal_ID<-"86436"
+colData(PvBS7.sce)$Barcode<-paste(colData(PvBS7.sce)$Barcode,"_",colData(PvBS7.sce)$Sample, sep = "")
+colnames(PvBS7.sce)<-colData(PvBS7.sce)$Barcode
+
+rowData(PvBS8.sce)$Description <- Pv_genes$description[match(rownames(PvBS8.sce), Pv_genes$ID)]
+rowData(PvBS8.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS8.sce), Pv_genes$ID)]
+colData(PvBS8.sce)$Sample<-"76"
+colData(PvBS8.sce)$Species<-"Saimiri_boliviensis"
+colData(PvBS8.sce)$Vivax_strain<-"AMRU-I"
+colData(PvBS8.sce)$Condition<-"No_Treatment"
+colData(PvBS8.sce)$Day<-"24_DPI"
+colData(PvBS8.sce)$Animal_ID<-"5107"
+colData(PvBS8.sce)$Barcode<-paste(colData(PvBS8.sce)$Barcode,"_",colData(PvBS8.sce)$Sample, sep = "")
+colnames(PvBS8.sce)<-colData(PvBS8.sce)$Barcode
+
+rowData(PvBS9.sce)$Description <- Pv_genes$description[match(rownames(PvBS9.sce), Pv_genes$ID)]
+rowData(PvBS9.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS9.sce), Pv_genes$ID)]
+colData(PvBS9.sce)$Sample<-"77"
+colData(PvBS9.sce)$Species<-"Aotus_nancymaae"
+colData(PvBS9.sce)$Vivax_strain<-"AMRU-I"
+colData(PvBS9.sce)$Condition<-"CQ_(16h_10mg/kg)"
+colData(PvBS9.sce)$Day<-"16_DPI"
+colData(PvBS9.sce)$Animal_ID<-"86416"
+colData(PvBS9.sce)$Barcode<-paste(colData(PvBS9.sce)$Barcode,"_",colData(PvBS9.sce)$Sample, sep = "")
+colnames(PvBS9.sce)<-colData(PvBS9.sce)$Barcode
+
+rowData(PvBS10.sce)$Description <- Pv_genes$description[match(rownames(PvBS10.sce), Pv_genes$ID)]
+rowData(PvBS10.sce)$GeneDescription <- Pv_genes$GeneDescription[match(rownames(PvBS10.sce), Pv_genes$ID)]
+colData(PvBS10.sce)$Sample<-"78"
+colData(PvBS10.sce)$Species<-"Aotus_nancymaae"
+colData(PvBS10.sce)$Vivax_strain<-"AMRU-I"
+colData(PvBS10.sce)$Condition<-"No_Treatment"
+colData(PvBS10.sce)$Day<-"12_DPI"
+colData(PvBS10.sce)$Animal_ID<-"86416"
+colData(PvBS10.sce)$Barcode<-paste(colData(PvBS10.sce)$Barcode,"_",colData(PvBS10.sce)$Sample, sep = "")
+colnames(PvBS10.sce)<-colData(PvBS10.sce)$Barcode
+
+```
+
+Predict doublets.
+
+```{r find doublets}
+
+set.seed(12345)
+
+PvBS1.sce <- scDblFinder(PvBS1.sce, verbose=T, score= "ratio")
+PvBS2.sce <- scDblFinder(PvBS2.sce, verbose=T, score= "ratio")
+PvBS3.sce <- scDblFinder(PvBS3.sce, verbose=T, score= "ratio")
+PvBS4.sce <- scDblFinder(PvBS4.sce, verbose=T, score= "ratio")
+PvBS5.sce <- scDblFinder(PvBS5.sce, verbose=T, score= "ratio")
+PvBS6.sce <- scDblFinder(PvBS6.sce, verbose=T, score= "ratio")
+PvBS7.sce <- scDblFinder(PvBS7.sce, verbose=T, score= "ratio")
+PvBS8.sce <- scDblFinder(PvBS8.sce, verbose=T, score= "ratio")
+PvBS9.sce <- scDblFinder(PvBS9.sce, verbose=T, score= "ratio")
+PvBS10.sce <- scDblFinder(PvBS10.sce, verbose=T, score= "ratio")
+
+```
+
+Let's save the single-cell objects in the event we want to access these objects later one.
+
+```{r save single-cell objects}
+
+saveRDS(PvBS1.sce, "outputs/6b_PvBS1_sce.rds")
+saveRDS(PvBS2.sce, "outputs/6b_PvBS2_sce.rds")
+saveRDS(PvBS3.sce, "outputs/6b_PvBS3_sce.rds")
+saveRDS(PvBS4.sce, "outputs/6b_PvBS4_sce.rds")
+saveRDS(PvBS5.sce, "outputs/6b_PvBS5_sce.rds")
+saveRDS(PvBS6.sce, "outputs/6b_PvBS6_sce.rds")
+saveRDS(PvBS7.sce, "outputs/6b_PvBS7_sce.rds")
+saveRDS(PvBS8.sce, "outputs/6b_PvBS8_sce.rds")
+saveRDS(PvBS9.sce, "outputs/6b_PvBS9_sce.rds")
+saveRDS(PvBS10.sce, "outputs/6b_PvBS10_sce.rds")
+
+```
+
+... and as a list.
+```{r loop}
+
+all_PvBS <- list(PvBS1.sce, PvBS2.sce, PvBS3.sce, PvBS4.sce, PvBS5.sce, PvBS6.sce, PvBS7.sce, PvBS8.sce, PvBS9.sce, PvBS10.sce)
+
+saveRDS(all_PvBS, "outputs/6b_all_PvBS_1.rds")
+
+```
+
+We can now add some per cell metrics pre filtering.
+```{r uis upload}
+
+Pv_UIS<- read_excel("path/to/UIS_PvP01.xlsx", sheet = "Sheet2")
+is.uis<-Pv_UIS$Gene
+
+for (i in 1:length(all_PvBS)){
+  all_PvBS[[i]] <- addPerCellQC(all_PvBS[[i]], subsets=list(uis=is.uis))
+  all_PvBS[[i]] <- addPerFeatureQC(all_PvBS[[i]], detection_limit = 0)
+}
+
+```
+
+Pre-filtering visualization part I. 
+  - Highlight outliers.
+```{r filter high count, fig.width=6, fig.height=8}
+
+PvBS_meta <- NULL
+for (i in 1:length(all_PvBS)) {
+  PvBS_meta[[i]] <- as.data.frame(colData(all_PvBS[[i]]))
+}
+ 
+PvBS_meta <- lapply(PvBS_meta, function(i){
+  mutate(i, keep = case_when(
+           isOutlier(sum, nmads = 3, type = "higher", log = T) | detected<40 ~ TRUE,
+           TRUE~ FALSE
+  ))
+})
+ 
+```
+
+Pre-filtering visualization part  II. 
+  - Visualise some QC stats pre cell filtering.
+  
+```{r visualization pre-cell filtering, , fig.width=6, fig.height=8}
+
+rep_id <- list("PvBS1","PvBS2", "PvBS3", "PvBS4", "PvBS5", "PvBS6", "PvBS7", "PvBS8", "PvBS9", "PvBS10")
+
+histogram_density_plots_sum <- lapply(seq_along(PvBS_meta),function(i){
+  ggplot(PvBS_meta[[i]], aes(x=sum)) +
+    geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+    geom_density(alpha=0.6)+
+    scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+    scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+    labs(title=rep_id[i], x="Sum", y = "Density")+
+    theme_linedraw()+
+    border()+
+    scale_x_log10()+
+    scale_y_continuous()
+})
+
+histogram_density_plots_detected <- lapply(seq_along(PvBS_meta),function(i){
+  ggplot(PvBS_meta[[i]], aes(x=detected)) +
+geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+geom_density(alpha=0.6)+
+scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+labs(title=rep_id[i], x="Genes per sporozoite", y = "Density") +
+    theme_linedraw() +
+    border() +
+    scale_x_log10() +
+  scale_y_continuous()
+})
+
+histogram_density_plots_uis <- lapply(seq_along(PvBS_meta),function(i){
+  ggplot(PvBS_meta[[i]], aes(x=subsets_uis_percent)) +
+geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+geom_density(alpha=0.6)+
+scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+labs(title=rep_id[i], x="% UIS", y = "Density") +
+    theme_linedraw() +
+    border() +
+    scale_x_log10() +
+  scale_y_continuous()
+})
+
+UMI_gene_plots_filt <- lapply(seq_along(PvBS_meta), function(i){
+  ggplot(PvBS_meta[[i]], mapping = aes(x = sum, y = detected, colour = !keep)) +
+  geom_jitter(alpha = 0.35)+
+  theme_linedraw()+
+  scale_x_log10()+
+  scale_y_log10()+
+  labs(title = rep_id[i], x ="Total UMIs", y = "Genes detected")
+})
+
+(histogram_density_plots_sum[[1]]+histogram_density_plots_sum[[2]]+histogram_density_plots_sum[[3]]+histogram_density_plots_sum[[4]]+histogram_density_plots_sum[[5]]+histogram_density_plots_sum[[6]]+histogram_density_plots_sum[[7]]+histogram_density_plots_sum[[8]]+histogram_density_plots_sum[[9]]+histogram_density_plots_sum[[10]])/
+(histogram_density_plots_detected[[1]]+histogram_density_plots_detected[[2]]+histogram_density_plots_detected[[3]]+histogram_density_plots_detected[[4]]+histogram_density_plots_detected[[5]]+histogram_density_plots_detected[[6]]+histogram_density_plots_detected[[7]]+histogram_density_plots_detected[[8]]+histogram_density_plots_detected[[9]]+histogram_density_plots_detected[[10]])/
+(histogram_density_plots_uis [[1]]+histogram_density_plots_uis [[2]]+histogram_density_plots_uis [[3]]+histogram_density_plots_uis [[4]]+histogram_density_plots_uis [[5]]+histogram_density_plots_uis [[6]]+histogram_density_plots_uis [[7]]+histogram_density_plots_uis[[8]]+histogram_density_plots_uis [[9]]+histogram_density_plots_uis [[10]])/
+  (UMI_gene_plots_filt[[1]]+UMI_gene_plots_filt[[2]]+UMI_gene_plots_filt[[3]]+UMI_gene_plots_filt[[4]]+UMI_gene_plots_filt[[5]]+UMI_gene_plots_filt[[6]]+UMI_gene_plots_filt[[7]]+UMI_gene_plots_filt[[8]]+UMI_gene_plots_filt[[9]]+UMI_gene_plots_filt[[10]])+
+plot_annotation(title = 'Density distributions of cell libraries prior to filtering',tag_levels = 'A')
+
+```
+
+```{r filter high count}
+# get cells w/ few/many detected genes
+# create lists for filtering - 3 NMADS at top and remove any cell with less than 40 genes total detected (ie each cell must have detected at least 40 different genes)
+
+outliers <- NULL
+for (i in 1:length(all_PvBS)) {
+  outliers[[i]] <- isOutlier(colData(all_PvBS[[i]])$sum, nmads = 3, type = "higher", log = T) | colData(all_PvBS[[i]])$detected < 40
+}
+
+# subset
+for (i in 1:length(all_PvBS)){
+  all_PvBS[[i]] <- all_PvBS[[i]][ ,!(outliers[[i]])]
+}
+
+# remove gene rows (3 counts in two cells)
+for (i in 1:length(all_PvBS)){
+  all_PvBS[[i]] <- all_PvBS[[i]][rowSums(counts(all_PvBS[[i]])>2)>1, ]
+}
+
+```
+
+The SCE objects have been modified. Thus we need to recalculate the per cell and per feature metrics. These new values will give us the final metrics for the trimmed SCE objects.
+
+```{r reculaculate QC per cell metrics}
+
+colData(all_PvBS[[1]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[1]])[,18:19]
+colData(all_PvBS[[1]])[,18:23]<-NULL
+# 
+colData(all_PvBS[[2]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[2]])[,18:19]
+colData(all_PvBS[[2]])[,18:23]<-NULL
+# 
+colData(all_PvBS[[3]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[3]])[,18:19]
+colData(all_PvBS[[3]])[,18:23]<-NULL
+# 
+colData(all_PvBS[[4]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[4]])[,18:19]
+colData(all_PvBS[[4]])[,18:23]<-NULL
+
+colData(all_PvBS[[5]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[5]])[,18:19]
+colData(all_PvBS[[5]])[,18:23]<-NULL
+# 
+colData(all_PvBS[[6]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[6]])[,18:19]
+colData(all_PvBS[[6]])[,18:23]<-NULL
+# 
+colData(all_PvBS[[7]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[7]])[,18:19]
+colData(all_PvBS[[7]])[,18:23]<-NULL
+# 
+colData(all_PvBS[[8]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[8]])[,18:19]
+colData(all_PvBS[[8]])[,18:23]<-NULL
+# 
+colData(all_PvBS[[9]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[9]])[,18:19]
+colData(all_PvBS[[9]])[,18:23]<-NULL
+
+colData(all_PvBS[[10]])[,c("preFilterSum", "preFilterDetected")]<-colData(all_PvBS[[10]])[,18:19]
+colData(all_PvBS[[10]])[,18:23]<-NULL
+
+# 
+rowData(all_PvBS[[1]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[1]])[,6:7]
+rowData(all_PvBS[[1]])[,6:7]<-NULL
+# 
+rowData(all_PvBS[[2]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[2]])[,6:7]
+rowData(all_PvBS[[2]])[,6:7]<-NULL
+# 
+rowData(all_PvBS[[3]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[3]])[,6:7]
+rowData(all_PvBS[[3]])[,6:7]<-NULL
+#
+rowData(all_PvBS[[4]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[4]])[,6:7]
+rowData(all_PvBS[[4]])[,6:7]<-NULL
+
+rowData(all_PvBS[[5]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[5]])[,6:7]
+rowData(all_PvBS[[5]])[,6:7]<-NULL
+# 
+rowData(all_PvBS[[6]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[6]])[,6:7]
+rowData(all_PvBS[[6]])[,6:7]<-NULL
+# 
+rowData(all_PvBS[[7]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[7]])[,6:7]
+rowData(all_PvBS[[7]])[,6:7]<-NULL
+# 
+rowData(all_PvBS[[8]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[8]])[,6:7]
+rowData(all_PvBS[[8]])[,6:7]<-NULL
+# 
+rowData(all_PvBS[[9]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[9]])[,6:7]
+rowData(all_PvBS[[9]])[,6:7]<-NULL
+
+rowData(all_PvBS[[10]])[,c("preFilterMean", "preFilterDetected")]<-rowData(all_PvBS[[10]])[,6:7]
+rowData(all_PvBS[[10]])[,6:7]<-NULL
+
+```
+
+```{r calculate new QC info on filtered objects}
+
+is.uis<-Pv_UIS$Gene
+is.uis[(is.uis %in% rowData(all_PvBS[[i]])$ID)] 
+
+for (i in 1:length(all_PvBS)){
+  all_PvBS[[i]] <- addPerCellQC(all_PvBS[[i]], subsets=list(uis=is.uis[(is.uis %in% rowData(all_PvBS[[i]])$ID)] ))
+  all_PvBS[[i]] <- addPerFeatureQC(all_PvBS[[i]], detection_limit = 0)
+}
+```
+
+Add some supplementary metrics for each of the cells.
+
+```{r add supplementary column metadata}
+
+source(system.file("extdata", "scrna_alternatives.R", package="pipeComp"))
+
+add_supp_meta <- function(ds){
+  ds$total_features <- ds$detected
+  ds$log10_total_features <- log10(ds$detected)
+  ds$total_counts <- ds$sum
+  ds$log10_total_counts <- log10(ds$sum+1)
+  ds$featcount_ratio <- ds$log10_total_counts/ds$log10_total_features
+  ds$featcount_dist <- getFeatCountDist(ds)
+  ds$pct_counts_top_50_features <- ds$percent_top_50
+  ds
+}
+
+for (i in 1:length(all_PvBS)){
+  all_PvBS[[i]] <- add_supp_meta(all_PvBS[[i]])
+}
+
+```
+
+Revisualize the data post-filtering.
+```{r vizualization post-cell filtering, , fig.width=6, fig.height=8}
+
+PvBS_meta_2<- NULL
+for (i in 1:length(all_PvBS)) {
+  PvBS_meta_2[[i]] <- as.data.frame(colData(all_PvBS[[i]]))
+}
+ 
+PvBS_meta_2 <- lapply(PvBS_meta_2, function(i){
+  mutate(i, keep = case_when(
+           isOutlier(sum, nmads = 3, type = "higher", log = T) | detected<40 ~ TRUE,
+           TRUE~ FALSE
+  ))
+})
+
+rep_id <- list("PvBS1", "PvBS2", "PvBS3", "PvBS4", "PvBS5", "PvBS6", "PvBS7", "PvBS8", "PvBS9", "PvBS10")
+
+histogram_2_density_plots_sum <- lapply(seq_along(PvBS_meta_2),function(i){
+  ggplot(PvBS_meta_2[[i]], aes(x=sum)) +
+    geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+    geom_density(alpha=0.6)+
+    scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+    scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+    labs(title=rep_id[i], x="Sum", y = "Density")+
+    theme_linedraw()+
+    border()+
+    scale_x_log10()+
+    scale_y_continuous()
+})
+
+
+histogram_2_density_plots_detected <- lapply(seq_along(PvBS_meta_2),function(i){
+  ggplot(PvBS_meta_2[[i]], aes(x=detected)) +
+geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+geom_density(alpha=0.6)+
+scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+labs(title=rep_id[i], x="Genes per sporozoite", y = "Density") +
+    theme_linedraw() +
+    border() +
+    scale_x_log10() +
+  scale_y_continuous()
+})
+
+histogram_2_density_plots_uis <- lapply(seq_along(PvBS_meta_2),function(i){
+  ggplot(PvBS_meta_2[[i]], aes(x=subsets_uis_percent)) +
+geom_histogram(aes(y=..density..), position="identity", alpha=0.5)+
+geom_density(alpha=0.6)+
+scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+scale_fill_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+labs(title=rep_id[i], x="% UIS", y = "Density") +
+    theme_linedraw() +
+    border() +
+    scale_x_log10() +
+  scale_y_continuous()
+})
+
+UMI_gene_plots_filt_2 <- lapply(seq_along(PvBS_meta_2), function(i){
+  ggplot(PvBS_meta_2[[i]], mapping = aes(x = sum, y = detected, colour = !keep)) +
+  geom_jitter(alpha = 0.35)+
+  theme_linedraw()+
+  scale_x_log10()+
+  scale_y_log10()+
+  labs(title = rep_id[i], x ="Total UMIs", y = "Genes detected")
+})
+
+(histogram_2_density_plots_sum[[1]]+histogram_2_density_plots_sum[[2]]+histogram_2_density_plots_sum[[3]]+histogram_2_density_plots_sum[[4]]+histogram_2_density_plots_sum[[5]]+histogram_2_density_plots_sum[[6]]+histogram_2_density_plots_sum[[7]]+histogram_2_density_plots_sum[[8]]+histogram_2_density_plots_sum[[9]]+histogram_2_density_plots_sum[[10]])/
+(histogram_2_density_plots_detected[[1]]+histogram_2_density_plots_detected[[2]]+histogram_2_density_plots_detected[[3]]+histogram_2_density_plots_detected[[4]]+histogram_2_density_plots_detected[[5]]+histogram_2_density_plots_detected[[6]]+histogram_2_density_plots_detected[[7]]+histogram_2_density_plots_detected[[8]]+histogram_2_density_plots_detected[[9]]+histogram_2_density_plots_detected[[10]])/
+(histogram_2_density_plots_uis [[1]]+histogram_2_density_plots_uis [[2]]+histogram_2_density_plots_uis [[3]]+histogram_2_density_plots_uis [[4]]+histogram_2_density_plots_uis [[5]]+histogram_2_density_plots_uis [[6]]+histogram_2_density_plots_uis [[7]]+histogram_2_density_plots_uis[[8]]+histogram_2_density_plots_uis [[9]]+histogram_2_density_plots_uis [[10]])/
+  (UMI_gene_plots_filt_2[[1]]+UMI_gene_plots_filt_2[[2]]+UMI_gene_plots_filt_2[[3]]+UMI_gene_plots_filt_2[[4]]+UMI_gene_plots_filt_2[[5]]+UMI_gene_plots_filt_2[[6]]+UMI_gene_plots_filt_2[[7]]+UMI_gene_plots_filt_2[[8]]+UMI_gene_plots_filt_2[[9]]+UMI_gene_plots_filt_2[[10]])+
+plot_annotation(title = 'Density distributions of cell libraries prior to filtering',tag_levels = 'A')
+
+```
+```{r create table of cell/gene count info from filtered dataset}
+dims <-NULL
+for (i in 1:length(all_PvBS)) {
+  dims[[i]] <- dim(all_PvBS[[i]])
+}
+
+dims <- data.frame(dims)
+colnames(dims) <- rep_id
+rownames(dims) <- c("Genes confidently detected", "Number of cells")
+
+knitr::kable(dims)
+```
+
+We can visualize the complexity of the library by plotting the number of features versus the cumulative proportion of the library.
+```{r library complexity}
+
+plotScater(PvBS1.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+plotScater(PvBS2.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+plotScater(PvBS3.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+plotScater(PvBS4.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+plotScater(PvBS5.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+plotScater(PvBS6.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+plotScater(PvBS7.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+plotScater(PvBS8.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+plotScater(PvBS9.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+plotScater(PvBS10.sce, nfeatures = 2000, colour_by = "featcount_ratio")
+
+```
+
+Add some extra metadata before saving:
+```{r Pv IDC metadata expanded}
+
+for (i in 1:length(all_PvBS)) {
+  colData(all_PvBS[[i]])$Stage <- "BloodStage"
+  colData(all_PvBS[[i]])$location<-"Blood"
+  colData(all_PvBS[[i]])$species<-"Vivax"
+}
+
+```
+
+Let's save the filtered SCE objects. 
+```{r save filtered SCE objects Sa BS vivax}
+
+saveRDS(all_PvBS, "outputs/6b_all_PvBS_filtered.rds")
+
+```
+
+Let's now move in to Seurat to continue our analysis of the data.
+
+We have generated a ton of data files that are no longer required. Let's clear our environment and reload the saved filtered SCE objects.
+
+```{r clear environment and reload filtered BS data}
+
+all_PvBS<-readRDS("outputs/6b_all_PvBS_filtered.rds")
+
+```
+
+Let's procede with merging the datasets. First, create a Seurat object.
+
+```{r transform BS SCE to Seurat}
+
+PvBS.big <- NULL
+for (i in 1:length(all_PvBS)) {
+  PvBS.big[[i]] <- as.Seurat(all_PvBS[[i]], counts = "counts", data = NULL)
+  PvBS.big[[i]]$nCount_RNA<-PvBS.big[[i]]$sum
+  PvBS.big[[i]]$nFeature_RNA<-PvBS.big[[i]]$detected
+}
+```
+
+Let's plot how many blood stage transcriptomes we are assessing for each replicate.
+
+```{r number of cells per rep}
+
+Pv1BS.seu<-PvBS.big[[1]]
+Pv2BS.seu<-PvBS.big[[2]]
+Pv3BS.seu<-PvBS.big[[3]]
+Pv4BS.seu<-PvBS.big[[4]]
+Pv5BS.seu<-PvBS.big[[5]]
+Pv6BS.seu<-PvBS.big[[6]]
+Pv7BS.seu<-PvBS.big[[7]]
+Pv8BS.seu<-PvBS.big[[8]]
+Pv9BS.seu<-PvBS.big[[9]]
+Pv10BS.seu<-PvBS.big[[10]]
+
+Pv.combined <- merge(x = Pv1BS.seu, y = Pv2BS.seu, project = "Pv.combined")
+Pv.combined <- merge(x =Pv.combined, y = Pv3BS.seu, project = "Pv.combined")
+dim(Pv.combined)
+Pv.combined <- merge(x =Pv.combined, y = Pv4BS.seu, project = "Pv.combined")
+dim(Pv.combined)
+Pv.combined <- merge(x =Pv.combined, y = Pv5BS.seu, project = "Pv.combined")
+dim(Pv.combined)
+Pv.combined <- merge(x =Pv.combined, y = Pv6BS.seu, project = "Pv.combined")
+dim(Pv.combined)
+Pv.combined <- merge(x =Pv.combined, y = Pv7BS.seu, project = "Pv.combined")
+dim(Pv.combined)
+Pv.combined <- merge(x =Pv.combined, y = Pv8BS.seu, project = "Pv.combined")
+dim(Pv.combined)
+Pv.combined <- merge(x =Pv.combined, y = Pv9BS.seu, project = "Pv.combined")
+dim(Pv.combined)
+Pv.combined <- merge(x =Pv.combined, y = Pv10BS.seu, project = "Pv.combined")
+dim(Pv.combined)
+
+Pv.combined.sce<-as.SingleCellExperiment(Pv.combined)
+
+Pv.combined.sce$Day<-sapply(Pv.combined$Day,unlist)
+
+Pv.combined@meta.data$Day<- sapply(Pv.combined@meta.data$Day,unlist)
+
+plot.data <- Pv.combined@meta.data %>%
+    dplyr::select(Sample, Day, Sample) 
+
+# i. Blood stage assessed post cell and gene filtering.
+
+# with axis titles and text
+
+f1B<- ggplot(plot.data, aes(x =Sample, fill = Day)) +
+    geom_bar(color='black') +
+    scale_fill_manual(values = c("black", "black", "black", "black", "black","black", "black", "black", "black", "black")) +
+    labs(y = "Number of cells") +
+    theme_cowplot() +
+    theme(legend.position = "none",
+          axis.title.x = element_blank(),
+          strip.text = element_text(size = 15,
+                                    margin = margin(0, 0, 2, 0, "pt")),
+          strip.background = element_blank(),
+          strip.placement = "outside")+border()
+f1B
+
+# without axs titles and text
+
+ggplot(plot.data, aes(x = Sample, fill = Sample)) +
+    geom_bar(color='black') +
+    scale_fill_manual(values = c("black", "black", "black",  "black", "black","black", "black", "black", "black", "black")) +
+    labs(y = "Number of cells") +
+    theme_cowplot() +
+    theme(legend.position = "none",
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.text.x = element_text(colour = 'white'),
+          strip.text = element_text(size = 15,
+                                    margin = margin(0, 0, 2, 0, "pt")),
+                                    strip.background = element_blank(),
+                                    strip.placement = "outside")
+
+# ii. Per cell metrics for each of the three replicates.
+
+ggarrange(
+ggplot(Pv.combined@meta.data, aes(x = Sample, y = detected))+geom_violin(trim=FALSE, fill='#A4A4A4', color="black")+ 
+ theme_linedraw()+scale_y_log10()+NoLegend()+geom_boxplot(width=0.05, outlier.size = 0.1, outlier.alpha = 0.5)+
+  theme(text = element_text(size=20)),
+
+ggplot(Pv.combined@meta.data, aes(x = Sample, y = sum))+geom_violin(trim=FALSE, fill='#A4A4A4', color="black")+ 
+ theme_linedraw()+scale_y_log10()+NoLegend()+geom_boxplot(width=0.05, outlier.size = 0.1, outlier.alpha = 0.5)+
+  theme(text = element_text(size=20)),
+ncol = 1, align = "hv")
+
+
+```
+
+At this point we have Seurat objects however the objects do not contain log normalized data. We can see this if we access the data slot of each object. You will find that it is equivalent to the counts. In the following steps we will use the function NormalizeData() to update the data slot.
+
+Let's normalize the data and find the variable features in each of the BS datasets.
+
+```{r BS normalize and feature selection }
+
+options(future.globals.maxSize = 4000 * 1024^2)
+
+for (i in 1:length(PvBS.big)) {
+    PvBS.big[[i]] <- NormalizeData(PvBS.big[[i]], verbose = TRUE)
+    PvBS.big[[i]] <- FindVariableFeatures(PvBS.big[[i]], selection.method = "vst", nfeatures = nrow(PvBS.big[[i]])*.3,verbose = FALSE)
+}
+
+hvgs_per_dataset <- lapply(PvBS.big, function(x) { x@assays$RNA@var.features })
+
+
+hvgs_per_dataset <-Reduce(intersect, hvgs_per_dataset)
+hvgs_per_dataset<-as.data.frame(hvgs_per_dataset)
+
+```
+
+Find anchors between the 10 datasets. 
+
+```{r find anchors}
+
+PvBS.big.anchors <- FindIntegrationAnchors(object.list = PvBS.big, dims = 1:30)
+
+```
+Once we have found the anchors. We can integrate the data.
+
+```{r integrate}
+
+set.seed(418462)
+
+PvBS.big.int <- IntegrateData(anchorset = PvBS.big.anchors, dims = 1:30, new.assay.name = "CCA")
+names(PvBS.big.int@assays)
+
+```
+We can now scale the data before performing some data reduction transformations.
+
+```{r scale and reduce integrated data}
+
+#Run Dimensional reduction on integrated space
+
+PvBS.big.int <- ScaleData(PvBS.big.int, verbose = FALSE,assay = "CCA")
+
+PvBS.big.int <- RunPCA(PvBS.big.int, npcs = 30, verbose = FALSE, assay = "CCA",reduction.name = "PCA_on_CCA")
+
+PvBS.big.int <- RunUMAP(PvBS.big.int, reduction = "PCA_on_CCA", dims = 1:30,reduction.name = "UMAP_on_CCA", n.components = 2L, seed.use = 365415, umap.method = "umap-learn")
+
+PvBS.big.int.3D <- RunUMAP(PvBS.big.int, reduction = "PCA_on_CCA", dims = 1:30, reduction.name = "UMAP_on_CCA", n.components = 3L,
+                         umap.method = "umap-learn")
+
+```
+Let's see how the data integrates..
+
+```{r plot integrated }
+
+plot_grid(ncol = 1,
+  DimPlot(PvBS.big.int, reduction = "PCA_on_CCA", group.by = "Sample"),
+  DimPlot(PvBS.big.int, reduction = "UMAP_on_CCA", group.by = "Sample")
+)
+
+DimPlot(PvBS.big.int, reduction = "UMAP_on_CCA", split.by = "Condition")
+DimPlot(PvBS.big.int, reduction = "UMAP_on_CCA", group.by  = "Condition")
+ 
+# sporozoite marker s10
+FeaturePlot(PvBS.big.int, feature = "PVP01-0304200", dims = c(1,2))
+FeaturePlot(PvBS.big.int.3D, feature = "PVP01-0304200", dims = c(1,3))
+FeaturePlot(PvBS.big.int.3D, feature = "PVP01-0304200", dims = c(2,3))
+
+# 3d interactive plot
+
+pal3<-c(pal_lancet("lanonc")(9), "yellow")
+
+PvBS.big.int.3D %>%
+  tidyseurat::plot_ly(
+    x = ~`UMAP_1`,
+    y = ~`UMAP_2`,
+    z = ~`UMAP_3`, 
+    size = 0.25,
+    color = ~Vivax_strain, 
+    colors = pal3
+  )
+
+# manuscript plots
+
+ggarrange(
+  PvBS.big.int %>%ggplot(aes(UMAP_1, UMAP_2)) +
+  geom_point(color = "black", alpha = 0.5 ,size = 0.1)+facet_grid(.~PvBS.big.int$Sample, scales = "fixed")+
+  ylab("UMAP2")+xlab("UMAP1")+
+  geom_density2d(size = 0.25, colour = "red", alpha = 0.5)+border()+theme_linedraw()+
+  theme(strip.background = element_blank(), strip.text.y = element_blank()),
+  
+  PvBS.big.int %>%ggplot(aes(UMAP_1, UMAP_2)) +
+  geom_point(color = "black", alpha = 0.5 ,size = 0.5)+
+  ylab("UMAP2")+xlab("UMAP1")+
+  geom_density2d(size = 1, colour = "red", alpha = 0.5)+border()+theme_linedraw()+
+  theme(strip.background = element_blank(), strip.text.y = element_blank())+
+  ylab("UMAP2")+xlab("UMAP1"), 
+  
+  common.legend = F, nrow = 2, ncol = 1, heights = c(1,2)
+          )+ 
+  theme(legend.position = "none")
+  
+```
+
+Very spiffy. Let's save the CCA merged data.
+
+```{r save integrated}
+
+saveRDS(PvBS.big.int,"outputs/6b_PvBSInt_CCA.rds")
+
+```
+
+Subset BS data to only integrate select datasets.
+Samples with no treatment are: 69,71-73, 75, 76, 78.
+
+```{r transform BS SCE to Seurat}
+
+all_PvBS_noTreat<-list(Pv1BS.seu, Pv3BS.seu, Pv4BS.seu, Pv5BS.seu, Pv7BS.seu, Pv8BS.seu, Pv10BS.seu)
+
+```
+
+Let's normalize the data and find the variable features in each of the BS datasets.
+
+```{r BS normalize and feature selection }
+
+options(future.globals.maxSize = 4000 * 1024^2)
+
+for (i in 1:length(all_PvBS_noTreat)) {
+    all_PvBS_noTreat[[i]] <- NormalizeData(all_PvBS_noTreat[[i]], verbose = TRUE)
+    all_PvBS_noTreat[[i]] <- FindVariableFeatures(all_PvBS_noTreat[[i]], selection.method = "vst", nfeatures = nrow(all_PvBS_noTreat[[i]])*.3,verbose = FALSE)
+}
+
+hvgs_per_dataset_noT <- lapply(all_PvBS_noTreat, function(x) { x@assays$RNA@var.features })
+
+
+hvgs_per_dataset_noT <-Reduce(intersect, hvgs_per_dataset_noT)
+hvgs_per_dataset_noT<-as.data.frame(hvgs_per_dataset_noT)
+
+
+```
+
+```{r save list}
+
+saveRDS(all_PvBS_noTreat,"outputs/6b_all_PvBS_noTreat.rds")
+
+```
+
+Find anchors between the subset of datasets
+
+```{r find anchors}
+
+all_PvBS_noTreat.anchors <- FindIntegrationAnchors(object.list = all_PvBS_noTreat, dims = 1:30)
+
+```
+Once we have found the anchors. We can integrate the data.
+
+```{r integrate}
+
+set.seed(418462)
+
+all_PvBS_noTreat.int <- IntegrateData(anchorset = all_PvBS_noTreat.anchors, dims = 1:30, new.assay.name = "CCA")
+names(all_PvBS_noTreat.int@assays)
+
+```
+We can now scale the data before performing some data reduction transformations.
+
+```{r scale and reduce integrated data}
+
+#Run Dimensionality reduction on integrated space
+
+all_PvBS_noTreat.int<- ScaleData(all_PvBS_noTreat.int, verbose = FALSE,assay = "CCA")
+
+all_PvBS_noTreat.int <- RunPCA(all_PvBS_noTreat.int, npcs = 30, verbose = FALSE, assay = "CCA",reduction.name = "PCA_on_CCA")
+
+all_PvBS_noTreat.int <- RunUMAP(all_PvBS_noTreat.int, reduction = "PCA_on_CCA", dims = 1:30,reduction.name = "UMAP_on_CCA", n.components = 2L, seed.use = 365415, umap.method = "umap-learn")
+
+all_PvBS_noTreat.int.3D <- RunUMAP(all_PvBS_noTreat.int, reduction = "PCA_on_CCA", dims = 1:30, reduction.name = "UMAP_on_CCA", n.components = 3L, umap.method = "umap-learn")
+
+```
+Let's see how the data integrates..
+
+```{r plot integrated }
+
+plot_grid(ncol = 1,
+  DimPlot(all_PvBS_noTreat.int, reduction = "PCA_on_CCA", group.by = "Sample"),
+  DimPlot(all_PvBS_noTreat.int, reduction = "UMAP_on_CCA", group.by = "Sample")
+)
+
+DimPlot(all_PvBS_noTreat.int, reduction = "UMAP_on_CCA", split.by = "Condition")
+DimPlot(all_PvBS_noTreat.int, reduction = "UMAP_on_CCA", group.by  = "Condition")
+ 
+# sporozoite marker s10
+FeaturePlot(all_PvBS_noTreat.int, feature = "PVP01-0102300", dims = c(1,2))
+FeaturePlot(all_PvBS_noTreat.int.3D, feature = "PVP01-0304200", dims = c(1,3))
+FeaturePlot(all_PvBS_noTreat.int.3D, feature = "PVP01-0304200", dims = c(2,3))
+
+# 3d interactive plot
+
+pal3<-c(pal_lancet("lanonc")(9), "yellow")
+
+all_PvBS_noTreat.int.3D %>%
+  tidyseurat::plot_ly(
+    x = ~`UMAP_1`,
+    y = ~`UMAP_2`,
+    z = ~`UMAP_3`, 
+    size = 0.25,
+    color = ~Vivax_strain, 
+    colors = pal3
+  )
+
+all_PvBS_noTreat.int.3D %>%
+  tidyseurat::plot_ly(
+    x = ~`PC_1`,
+    y = ~`PC_2`,
+    z = ~`PC_3`, 
+    size = 0.25,
+    color = ~Vivax_strain, 
+    colors = pal3
+  )
+
+# manuscript plots
+
+ggarrange(
+  all_PvBS_noTreat.int %>%ggplot(aes(UMAP_1, UMAP_2)) +
+  geom_point(color = "black", alpha = 0.5 ,size = 0.1)+facet_grid(.~all_PvBS_noTreat.int $Sample, scales = "fixed")+
+  ylab("UMAP2")+xlab("UMAP1")+
+  geom_density2d(size = 0.25, colour = "red", alpha = 0.5)+border()+theme_linedraw()+
+  theme(strip.background = element_blank(), strip.text.y = element_blank()),
+  
+  all_PvBS_noTreat.int %>%ggplot(aes(UMAP_1, UMAP_2)) +
+  geom_point(color = "black", alpha = 0.5 ,size = 0.5)+
+  ylab("UMAP2")+xlab("UMAP1")+
+  geom_density2d(size = 1, colour = "red", alpha = 0.5)+border()+theme_linedraw()+
+  theme(strip.background = element_blank(), strip.text.y = element_blank())+
+  ylab("UMAP2")+xlab("UMAP1"), 
+  
+  common.legend = F, nrow = 2, ncol = 1, heights = c(1,2)
+          )+ 
+  theme(legend.position = "none")
+  
+```
+
+Very spiffy. Let's save the CCA merged data.
+
+```{r save integrated}
+
+saveRDS(all_PvBS_noTreat.int,"outputs/6b_PvBSInt_NoT_CCA.rds")
+
+```
+
+We can now  perform some data reduction transformations.
+
+```{r reduce integrated data}
+
+#Run Dimensionality reduction on integrated space
+
+all_PvBS_noTreat.int <- RunPCA(all_PvBS_noTreat.int, verbose = FALSE, assay = "CCA",reduction.name = "PCA_on_CCA")
+ElbowPlot(PvBS.big.int, reduction = "PCA_on_CCA")
+
+# Plot PCA
+PCAPlot(PvBS.big.int, split.by = c("Animal_ID"))
+
+```
+With SCT transform, the more PCs chosen, the more variation is accounted for when performing the clustering.
+
+```{r UMAP BS data}
+
+PvBS.big.int <- RunUMAP(PvBS.big.int, reduction = "PCA_on_CCA", dims = 1:15,reduction.name = "UMAP_on_CCA", min.dist = 0.03)
+
+```
+
+Let's see how the data integrates..
+
+```{r plot integrated }
+
+plot_grid(ncol = 1,
+  DimPlot(PvBS.big.int, reduction = "UMAP_on_CCA", group.by = "Day")+border(),
+  DimPlot(PvBS.big.int, reduction = "UMAP_on_CCA", group.by = "Species", split.by = "Vivax_strain")+border()
+)
+
+DimPlot(PvBS.big.int, reduction = "UMAP_on_CCA", split.by = "Vivax_strain", group.by = "Day")+border()
+
+```
