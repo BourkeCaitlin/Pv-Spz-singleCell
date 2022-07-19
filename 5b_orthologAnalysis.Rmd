@@ -227,7 +227,8 @@ rep_split <-
         panel.grid.major = element_line(colour = "grey"),
         strip.background = element_blank(),
         strip.text = element_text(colour = "black"),
-        legend.position = "none")
+        legend.position = "none",
+        axis.text = element_text(size = 10))
 falciparum <- DimPlot(ortho_int, group.by = "species", cols = cols_falciparum)+
   tenx_theme()+
   labs(title = "P. falciparum", y = "")+
@@ -242,6 +243,9 @@ vivax <- DimPlot(ortho_int, group.by = "species", cols = cols_vivax, order = T)+
         plot.title = element_text(face = "italic"))
 multi_umap <- vivax+falciparum
 multi_umap/rep_split
+
+ggsave("plots/figure5a.svg", width = 12, height = 7, units = "in", dpi= 320)
+
 ```
 
 ```{r plotting 2 - species split}
@@ -279,6 +283,9 @@ DimPlot(ortho_int, group.by = "cluster_plot")+
   theme(legend.position = "right",
         panel.grid.major = element_line(colour = "grey")) + 
   scale_colour_futurama()
+
+ggsave("plots/figure5b.svg", width = 6, height = 4.3, units = "in", dpi= 320)
+
 ```
 
 ```{r plotting 4 - proportion across cogs}
@@ -956,8 +963,9 @@ Pcells<-ggplot(ClusterData,aes(x=Cluster, y = ifelse(Species == "P.falciparum", 
   scale_y_continuous(limits = c(-max(ClusterData$Cells), max(ClusterData$Cells))) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 15))+
   coord_flip()+theme_minimal()+border()+scale_fill_manual(values = c("#6CDBEB","#a7e831"))+
-  theme(axis.text=element_text(size=12, color = "black"),
-        axis.title=element_text(size=40,face="bold", color = "white"))+NoLegend()
+  theme(axis.text=element_text(size=18, color = "black"),
+        axis.title=element_text(size=40,face="bold", color = "white"))+NoLegend()+
+  labs(x = "", y = "")
 
 GeneData <- structure(list(Cluster = c("ORTHO_C1","ORTHO_C1","ORTHO_C2","ORTHO_C2", "ORTHO_C3", "ORTHO_C3","ORTHO_C4","ORTHO_C4"), 
                               Genes = c(368, 1326,433,1615,354,1770,982, 148),
@@ -970,8 +978,10 @@ Pgenes<-ggplot(GeneData,aes(x=Cluster, y = ifelse(Species == "P.falciparum", Gen
   scale_y_continuous(limits = c(-max(GeneData$Genes), max(GeneData$Genes))) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 15))+
   coord_flip()+theme_minimal()+border()+scale_fill_manual(values = c("#6CDBEB","#a7e831"))+
-  theme(axis.text=element_text(size=12, color = "black"),
-        axis.title=element_text(size=40,face="bold", color = "white"))+NoLegend()
+  theme(axis.text.x=element_text(size=15, color = "black"),
+        axis.text.y=element_text(size=18, color = "black"),
+        axis.title=element_text(size=40,face="bold", color = "white"))+NoLegend()+
+  labs(x = "", y = "")
 
 ggarrange(Pcells, Pgenes, nrow = 2, ncol = 1, align = "hv", common.legend = T)
 
@@ -986,12 +996,15 @@ Overlapgenes<-ggplot(OverlapData,aes(x=Cluster, y = Genes, fill=Species))+
   scale_y_continuous(limits = c(0, max(OverlapData$Genes))) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 15))+
   coord_flip()+theme_minimal()+border()+scale_fill_manual(values = c("black"))+
-  theme(axis.text.x=element_text(size=12, color = "black"),
-        axis.text.y=element_text(size=12, color = "black"),
-        axis.title=element_text(size=0,face="bold", color = "white"))+NoLegend()
+  theme(axis.text.x=element_text(size=15, color = "black"),
+        axis.text.y=element_text(size=18, color = "black"),
+        axis.title=element_text(size=0,face="bold", color = "white"))+NoLegend()+
+  labs(x = "", y = "")
 
 ggarrange(Pcells,
           ggarrange(Pgenes, Overlapgenes, ncol = 2, align = "hv"), nrow = 2, ncol = 1,heights = c(1,1))
+
+ggsave("plots/figure5cd.svg", width = 7.2, height = 4.5, units = "in", dpi= 320)
 
 ```
 
@@ -1038,7 +1051,7 @@ MarkersC3C4.RBP<-  MarkersC3C4 %>%
   mutate(plot_label= paste0(ID, " | ", falciparum, "::", description)) %>% 
   filter(str_detect(pfam_id, "PF05148|PF00849|PF10258|PF05063|PF00806|PF01253|PF00076|PF01200")) %>% 
 #filter this list for some of the pfams that are known to interact with RNA in different ways.
-    arrange(avg_log2FC)
+    arrange(-avg_log2FC)
  
 DotPlot(ortho_int_C3C4, features =  MarkersC3C4.RBP$Orthogroup, cluster.idents = F, assay = "originalexp", scale = F, dot.scale = 5)+
     geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
@@ -1046,12 +1059,17 @@ DotPlot(ortho_int_C3C4, features =  MarkersC3C4.RBP$Orthogroup, cluster.idents =
     coord_flip()+border()+
     scale_colour_viridis(guide = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
     scale_x_discrete(labels =MarkersC3C4.RBP$plot_label, position = "top")+
-  theme(legend.position = "bottom")
+    tenx_theme()+
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90))+
+  labs(x = "", y = "")
 
+ggsave("plots/figure5e.svg", width = 10, height = 7, units = "in", dpi= 320)
 
 ```
+
 ```{r}
-saveRDS(ortho_int, "outputs/5b_ortho_int")
+saveRDS(ortho_int, "outputs/5b_ortho_int.rds")
 ```
 
 
