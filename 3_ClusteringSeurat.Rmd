@@ -379,7 +379,4 @@ ggsave("plots/cluster_supp.png", width = 20, height = 10,  units = "in")
 
 ```{r save rds}
 saveRDS(alldata,"outputs/3_ClusteringSeurat.Rds")
-
-alldata <- readRDS("outputs/3_ClusteringSeurat.Rds")
-
 ```
